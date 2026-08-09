@@ -164,7 +164,17 @@ async function sendPush(watch, reading, reason) {
     }),
   });
   if (!res.ok) throw new Error(`OneSignal ${res.status}: ${await res.text()}`);
-  console.log(`  push enviado: ${title}`);
+
+  const out = await res.json();
+  const destinatarios = out.recipients ?? 0;
+
+  if (destinatarios === 0) {
+    console.log(`  ATENCAO: OneSignal aceitou mas nao entregou a ninguem.`);
+    console.log(`  resposta: ${JSON.stringify(out)}`);
+    console.log(`  causa comum: nenhum aparelho inscrito no segmento, ou inscricao expirada.`);
+  } else {
+    console.log(`  push enviado para ${destinatarios} aparelho(s): ${title}`);
+  }
 }
 
 // ---------- Main ----------
