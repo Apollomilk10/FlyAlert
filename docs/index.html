@@ -119,7 +119,7 @@
 <div id="watches"></div>
 
 <div class="panel">
-  <div class="eyebrow">Notificações · build 4</div>
+  <div class="eyebrow">Notificações · build 5</div>
   <p id="pushStatus">Ative para receber um aviso no celular assim que a tarifa cair.</p>
   <button id="pushBtn">Ativar notificações</button>
 </div>
@@ -287,6 +287,8 @@ OneSignalDeferred.push(async (OneSignal) => {
     await OneSignal.init({
       appId: ONESIGNAL_APP_ID,
       // O site vive em /FlyAlert/, não na raiz do domínio.
+      // Sem serviceWorkerOverrideForTypical o SDK ignora os dois campos abaixo.
+      serviceWorkerOverrideForTypical: true,
       serviceWorkerPath: 'FlyAlert/OneSignalSDKWorker.js',
       serviceWorkerParam: { scope: '/FlyAlert/' },
       allowLocalhostAsSecureOrigin: true,
