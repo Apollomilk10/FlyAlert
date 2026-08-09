@@ -48,9 +48,9 @@ Settings > Secrets and variables > Actions:
 
 ### 5. Front
 Em `web/index.html`, preencha `SUPABASE_URL`, `SUPABASE_ANON` (anon key, não a
-service_role) e `ONESIGNAL_APP_ID`. Publique a pasta `web/` no GitHub Pages.
+service_role) e `ONESIGNAL_APP_ID`. Publique a pasta `docs/` no GitHub Pages.
 Baixe os arquivos do SDK do OneSignal (`OneSignalSDKWorker.js`) e coloque em
-`web/` — o OneSignal mostra o link no próprio painel de setup.
+`docs/` — o OneSignal mostra o link no próprio painel de setup.
 
 ### 6. Testar
 Actions > "Checar preços" > Run workflow. Veja o log e confira se apareceu uma
