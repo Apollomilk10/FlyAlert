@@ -1,0 +1,31 @@
+name: Checar preços
+
+on:
+  schedule:
+    # A cada 6h (UTC). ~124 buscas/mês por rota — cabe no free tier do SerpApi.
+    - cron: '17 1,7,13,19 * * *'
+  workflow_dispatch:        # botão pra rodar na mão
+
+concurrency:
+  group: check-price
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Consultar preços e alertar
+        env:
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
+          ONESIGNAL_API_KEY: ${{ secrets.ONESIGNAL_API_KEY }}
+        run: node scripts/check-price.mjs
