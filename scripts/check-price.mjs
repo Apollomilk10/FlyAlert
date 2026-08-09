@@ -16,6 +16,8 @@ const {
 
 const COOLDOWN_HOURS = 20;   // não repete alerta antes disso
 const REALERT_DROP = 0.05;   // ...a menos que caia mais 5% do último alerta
+const JANELA_DIAS = 30;      // referência: mínimo observado nesse período
+const QUEDA_MINIMA = 30;     // em R$ — ignora queda insignificante
 
 for (const [k, v] of Object.entries({ SERPAPI_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
   if (!v) {
@@ -89,24 +91,22 @@ async function fetchPrice(watch) {
 // ---------- Decisão: isso é uma barganha? ----------
 
 async function shouldAlert(watch, reading) {
-  const reasons = [];
-
-  if (watch.target_price != null && reading.price <= Number(watch.target_price)) {
-    reasons.push('target');
-  }
-  if (reading.typical_low != null && reading.price < Number(reading.typical_low)) {
-    reasons.push('below_typical');
-  }
-
-  const history = await sb(
-    `price_checks?watch_id=eq.${watch.id}&select=price&order=price.asc&limit=1`
+  const desde = new Date(Date.now() - JANELA_DIAS * 86400_000).toISOString();
+  const janela = await sb(
+    `price_checks?watch_id=eq.${watch.id}&checked_at=gte.${desde}&select=price&order=price.asc&limit=1`
   );
-  const previousLow = history[0]?.price;
-  if (previousLow != null && reading.price < Number(previousLow)) {
-    reasons.push('all_time_low');
+  const minimo30 = janela[0] != null ? Number(janela[0].price) : null;
+
+  // Primeira leitura da janela: não há com o que comparar.
+  if (minimo30 == null) {
+    console.log('  sem histórico nos últimos 30 dias — apenas registrando');
+    return null;
   }
 
-  if (!reasons.length) return null;
+  const queda = minimo30 - reading.price;
+  console.log(`  mínimo de ${JANELA_DIAS} dias: ${money(minimo30, reading.currency)} (diferença: ${queda >= 0 ? '-' : '+'}${money(Math.abs(queda), reading.currency)})`);
+
+  if (queda < QUEDA_MINIMA) return null;
 
   // Cooldown: já avisei disso recentemente?
   const since = new Date(Date.now() - COOLDOWN_HOURS * 3600_000).toISOString();
@@ -121,19 +121,13 @@ async function shouldAlert(watch, reading) {
     }
   }
 
-  return reasons[0];
+  return { reason: 'minimo_30d', minimo30, queda };
 }
 
 // ---------- Push ----------
 
 const money = (v, currency) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency }).format(v);
-
-const REASON_TEXT = {
-  target: 'Bateu o seu teto',
-  below_typical: 'Abaixo da faixa normal',
-  all_time_low: 'Menor preço já visto',
-};
 
 async function enviar(payload) {
   const res = await fetch('https://api.onesignal.com/notifications', {
@@ -148,11 +142,11 @@ async function enviar(payload) {
   return res.json();
 }
 
-async function sendPush(watch, reading, reason) {
-  const title = `${watch.label} — ${money(reading.price, reading.currency)}`;
-  const body = reading.typical_low
-    ? `${REASON_TEXT[reason]}. Normal fica entre ${money(reading.typical_low, reading.currency)} e ${money(reading.typical_high, reading.currency)}.`
-    : REASON_TEXT[reason];
+async function sendPush(watch, reading, veredito) {
+  const { minimo30, queda } = veredito;
+  // Preço primeiro: o Android corta o fim do título.
+  const title = `${money(reading.price, reading.currency)} · ${watch.label}`;
+  const body = `${money(queda, reading.currency)} abaixo do mínimo dos últimos ${JANELA_DIAS} dias (${money(minimo30, reading.currency)}).`;
 
   if (!ONESIGNAL_APP_ID || !ONESIGNAL_API_KEY) {
     console.log(`  [sem OneSignal configurado] ${title} / ${body}`);
@@ -214,21 +208,21 @@ for (const watch of watches) {
     }
     console.log(`  ${money(reading.price, reading.currency)} — ${reading.airline ?? 'n/d'} — nível: ${reading.price_level ?? 'n/d'}`);
 
-    const reason = await shouldAlert(watch, reading);
+    const veredito = await shouldAlert(watch, reading);
 
     await sb('price_checks', {
       method: 'POST',
       body: JSON.stringify({ watch_id: watch.id, ...reading }),
     });
 
-    if (reason) {
-      const entregue = await sendPush(watch, reading, reason);
+    if (veredito) {
+      const entregue = await sendPush(watch, reading, veredito);
       // So marca como avisado se alguem recebeu — senao o cooldown
       // silenciaria o proximo ciclo sem nunca ter avisado ninguem.
       if (entregue && DRY_RUN !== 'true') {
         await sb('alerts_sent', {
           method: 'POST',
-          body: JSON.stringify({ watch_id: watch.id, price: reading.price, reason }),
+          body: JSON.stringify({ watch_id: watch.id, price: reading.price, reason: veredito.reason }),
         });
       }
     }
