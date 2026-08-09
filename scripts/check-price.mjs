@@ -156,11 +156,11 @@ async function sendPush(watch, reading, reason) {
 
   if (!ONESIGNAL_APP_ID || !ONESIGNAL_API_KEY) {
     console.log(`  [sem OneSignal configurado] ${title} / ${body}`);
-    return;
+    return false;
   }
   if (DRY_RUN === 'true') {
     console.log(`  [dry run] ${title} / ${body}`);
-    return;
+    return false;
   }
 
   const comum = {
@@ -183,7 +183,7 @@ async function sendPush(watch, reading, reason) {
       const n = out.recipients ?? 0;
       if (n > 0) {
         console.log(`  push entregue a ${n} aparelho(s) via ${nome}: ${title}`);
-        return;
+        return true;
       }
       console.log(`  ${nome}: 0 destinatarios — ${JSON.stringify(out.errors ?? out)}`);
     } catch (e) {
@@ -191,6 +191,7 @@ async function sendPush(watch, reading, reason) {
     }
   }
   console.log('  NENHUMA tentativa alcancou um aparelho. Confira Audience no painel do OneSignal.');
+  return false;
 }
 
 // ---------- Main ----------
@@ -221,8 +222,10 @@ for (const watch of watches) {
     });
 
     if (reason) {
-      await sendPush(watch, reading, reason);
-      if (DRY_RUN !== 'true') {
+      const entregue = await sendPush(watch, reading, reason);
+      // So marca como avisado se alguem recebeu — senao o cooldown
+      // silenciaria o proximo ciclo sem nunca ter avisado ninguem.
+      if (entregue && DRY_RUN !== 'true') {
         await sb('alerts_sent', {
           method: 'POST',
           body: JSON.stringify({ watch_id: watch.id, price: reading.price, reason }),
