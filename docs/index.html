@@ -119,7 +119,7 @@
 <div id="watches"></div>
 
 <div class="panel">
-  <div class="eyebrow">Notificações</div>
+  <div class="eyebrow">Notificações · build 4</div>
   <p id="pushStatus">Ative para receber um aviso no celular assim que a tarifa cair.</p>
   <button id="pushBtn">Ativar notificações</button>
 </div>
@@ -224,6 +224,15 @@ function cardHTML(w, checks){
 })();
 
 // ---- Push ----
+// Remove workers antigos presos no escopo /FlyAlert/ (o sw.js que existia antes).
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.getRegistrations().then(rs => {
+    for(const r of rs){
+      if(r.active && r.active.scriptURL.endsWith('/sw.js')) r.unregister();
+    }
+  }).catch(()=>{});
+}
+
 window.OneSignalDeferred = window.OneSignalDeferred || [];
 const btn = document.getElementById('pushBtn');
 const status = document.getElementById('pushStatus');
