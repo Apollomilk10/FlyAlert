@@ -86,6 +86,24 @@
   }
   .legend i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:5px}
 
+  .opcoes{
+    width:100%;border-collapse:collapse;margin:18px 0 6px;
+    font-family:'IBM Plex Mono',monospace;font-size:12px;
+  }
+  .opcoes th{
+    text-align:left;font-weight:400;font-size:10px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--ink-soft);
+    border-bottom:1px solid var(--ink);padding:0 8px 6px 0;
+  }
+  .opcoes td{
+    padding:9px 8px 9px 0;border-bottom:1px solid var(--rule);
+    vertical-align:baseline;
+  }
+  .opcoes tr:first-child td{font-weight:600}
+  .opcoes .val{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .opcoes tr:first-child .val{color:var(--magenta)}
+  .opcoes .direto{color:var(--cyan)}
+
   .panel{
     border:2px solid var(--ink);background:var(--paper-deep);
     padding:18px;margin-top:32px;
@@ -119,7 +137,7 @@
 <div id="watches"></div>
 
 <div class="panel">
-  <div class="eyebrow">Notificações · build 5</div>
+  <div class="eyebrow">Notificações · build 6</div>
   <p id="pushStatus">Ative para receber um aviso no celular assim que a tarifa cair.</p>
   <button id="pushBtn">Ativar notificações</button>
 </div>
@@ -170,6 +188,38 @@ function corridor(checks, low, high){
   </svg>`;
 }
 
+const dur = m => m == null ? '—' : `${Math.floor(m/60)}h${String(m%60).padStart(2,'0')}`;
+const hora = t => {
+  if(!t) return '';
+  const p = String(t).split(' ')[1];
+  return p ? p.slice(0,5) : '';
+};
+
+function tabelaOpcoes(atual){
+  const ofertas = atual.offers;
+  if(!Array.isArray(ofertas) || !ofertas.length) return '';
+  const base = Number(ofertas[0].price);
+
+  const linhas = ofertas.map(o => {
+    const dif = Number(o.price) - base;
+    const paradas = o.stops === 0
+      ? '<span class="direto">direto</span>'
+      : `${o.stops} parada${o.stops > 1 ? 's' : ''}`;
+    const saida = hora(o.departure);
+    return `<tr>
+      <td class="val">${brl(o.price, atual.currency)}${dif > 0 ? `<br><span style="color:var(--ink-soft)">+${brl(dif, atual.currency)}</span>` : ''}</td>
+      <td>${(o.airlines ?? []).join(' + ') || '—'}</td>
+      <td class="val">${dur(o.duration_min)}</td>
+      <td>${paradas}${saida ? `<br><span style="color:var(--ink-soft)">sai ${saida}${o.departure_id ? ' de '+o.departure_id : ''}</span>` : ''}</td>
+    </tr>`;
+  }).join('');
+
+  return `<table class="opcoes">
+    <thead><tr><th>Preço</th><th>Companhia</th><th>Duração</th><th>Trajeto</th></tr></thead>
+    <tbody>${linhas}</tbody>
+  </table>`;
+}
+
 function cardHTML(w, checks){
   const atual = checks.at(-1);
   const nivel = {low:'Barato',typical:'Normal',high:'Caro'}[atual.price_level] ?? '—';
@@ -191,6 +241,8 @@ function cardHTML(w, checks){
       <span><i style="background:#B5177E"></i>Preço observado</span>
       <span><i style="background:#2F7D95;opacity:.5"></i>Faixa normal ${brl(atual.typical_low, atual.currency)}–${brl(atual.typical_high, atual.currency)}</span>
     </div>` : ''}
+
+    ${tabelaOpcoes(atual)}
 
     <div class="meta">
       ${atual.airline ?? 'Companhia n/d'} · menor visto ${brl(menor, atual.currency)}
