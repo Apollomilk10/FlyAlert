@@ -10,6 +10,7 @@ const {
   SUPABASE_SERVICE_KEY,
   ONESIGNAL_APP_ID,
   ONESIGNAL_API_KEY,
+  ONESIGNAL_SUBSCRIPTION_ID,
   DRY_RUN,
 } = process.env;
 
@@ -134,6 +135,19 @@ const REASON_TEXT = {
   all_time_low: 'Menor preço já visto',
 };
 
+async function enviar(payload) {
+  const res = await fetch('https://api.onesignal.com/notifications', {
+    method: 'POST',
+    headers: {
+      Authorization: `Key ${ONESIGNAL_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ app_id: ONESIGNAL_APP_ID, ...payload }),
+  });
+  if (!res.ok) throw new Error(`OneSignal ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
 async function sendPush(watch, reading, reason) {
   const title = `${watch.label} — ${money(reading.price, reading.currency)}`;
   const body = reading.typical_low
@@ -149,32 +163,34 @@ async function sendPush(watch, reading, reason) {
     return;
   }
 
-  const res = await fetch('https://api.onesignal.com/notifications', {
-    method: 'POST',
-    headers: {
-      Authorization: `Key ${ONESIGNAL_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      app_id: ONESIGNAL_APP_ID,
-      included_segments: ['Subscribed Users'],
-      headings: { pt: title, en: title },
-      contents: { pt: body, en: body },
-      url: reading.booking_url ?? undefined,
-    }),
-  });
-  if (!res.ok) throw new Error(`OneSignal ${res.status}: ${await res.text()}`);
+  const comum = {
+    headings: { pt: title, en: title },
+    contents: { pt: body, en: body },
+    url: reading.booking_url ?? undefined,
+  };
 
-  const out = await res.json();
-  const destinatarios = out.recipients ?? 0;
-
-  if (destinatarios === 0) {
-    console.log(`  ATENCAO: OneSignal aceitou mas nao entregou a ninguem.`);
-    console.log(`  resposta: ${JSON.stringify(out)}`);
-    console.log(`  causa comum: nenhum aparelho inscrito no segmento, ou inscricao expirada.`);
-  } else {
-    console.log(`  push enviado para ${destinatarios} aparelho(s): ${title}`);
+  // Tenta na ordem: id fixo (se houver), depois os nomes de segmento possiveis.
+  const tentativas = [];
+  if (ONESIGNAL_SUBSCRIPTION_ID) {
+    tentativas.push(['id fixo', { include_subscription_ids: [ONESIGNAL_SUBSCRIPTION_ID] }]);
   }
+  tentativas.push(['segmento Subscribed Users', { included_segments: ['Subscribed Users'] }]);
+  tentativas.push(['segmento Total Subscriptions', { included_segments: ['Total Subscriptions'] }]);
+
+  for (const [nome, alvo] of tentativas) {
+    try {
+      const out = await enviar({ ...comum, ...alvo });
+      const n = out.recipients ?? 0;
+      if (n > 0) {
+        console.log(`  push entregue a ${n} aparelho(s) via ${nome}: ${title}`);
+        return;
+      }
+      console.log(`  ${nome}: 0 destinatarios — ${JSON.stringify(out.errors ?? out)}`);
+    } catch (e) {
+      console.log(`  ${nome}: ${e.message}`);
+    }
+  }
+  console.log('  NENHUMA tentativa alcancou um aparelho. Confira Audience no painel do OneSignal.');
 }
 
 // ---------- Main ----------
