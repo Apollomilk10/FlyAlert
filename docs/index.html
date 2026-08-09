@@ -227,56 +227,71 @@ function cardHTML(w, checks){
 window.OneSignalDeferred = window.OneSignalDeferred || [];
 const btn = document.getElementById('pushBtn');
 const status = document.getElementById('pushStatus');
+let OS = null;
 
-OneSignalDeferred.push(async (OneSignal) => {
-  await OneSignal.init({ appId: ONESIGNAL_APP_ID, allowLocalhostAsSecureOrigin:true });
-
-  const refresh = () => {
-    const sub = OneSignal.User.PushSubscription;
-    if(sub.optedIn && sub.id){
-      status.textContent = `Notificações ativas neste aparelho (${sub.id.slice(0,8)}).`;
-      btn.textContent = 'Ativado';
-      btn.disabled = true;
+// O listener é anexado já, mesmo antes do SDK carregar.
+btn.addEventListener('click', async () => {
+  if(!OS){
+    status.textContent = 'O serviço de notificação ainda não carregou. Aguarde uns segundos e tente de novo.';
+    return;
+  }
+  btn.disabled = true;
+  status.textContent = 'Registrando este aparelho...';
+  try{
+    if(Notification.permission !== 'granted'){
+      await OS.Notifications.requestPermission();
     }
-  };
-  refresh();
-  OneSignal.User.PushSubscription.addEventListener('change', refresh);
+    if(Notification.permission === 'denied'){
+      status.textContent = 'Permissão bloqueada. Libere as notificações nas configurações do site, no navegador, e tente de novo.';
+      btn.disabled = false;
+      return;
+    }
+    await OS.User.PushSubscription.optIn();
 
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    status.textContent = 'Registrando este aparelho...';
-    try{
-      if(Notification.permission !== 'granted'){
-        await OneSignal.Notifications.requestPermission();
-      }
-      if(Notification.permission === 'denied'){
-        status.textContent = 'Permissão bloqueada. Libere as notificações nas configurações do site, no navegador, e tente de novo.';
-        btn.disabled = false;
-        return;
-      }
-      // Permissão concedida não basta: é preciso inscrever de fato.
-      await OneSignal.User.PushSubscription.optIn();
+    for(let i=0; i<12 && !OS.User.PushSubscription.id; i++){
+      await new Promise(r => setTimeout(r, 500));
+    }
+    refreshPush();
 
-      // O registro é assíncrono; espera até uns 6s pelo id da inscrição.
-      for(let i=0; i<12 && !OneSignal.User.PushSubscription.id; i++){
-        await new Promise(r => setTimeout(r, 500));
-      }
-      refresh();
-
-      if(!OneSignal.User.PushSubscription.optedIn){
-        status.textContent = 'O aparelho não completou o registro. Recarregue a página e tente mais uma vez.';
-        btn.disabled = false;
-      }
-    }catch(e){
-      status.textContent = `Não foi possível ativar: ${e.message}`;
+    if(!OS.User.PushSubscription.optedIn){
+      status.textContent = 'O aparelho não completou o registro. Recarregue a página e tente mais uma vez.';
       btn.disabled = false;
     }
-  });
+  }catch(e){
+    status.textContent = `Não foi possível ativar: ${e.message}`;
+    btn.disabled = false;
+  }
 });
 
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('sw.js').catch(()=>{});
+function refreshPush(){
+  if(!OS) return;
+  const sub = OS.User.PushSubscription;
+  if(sub.optedIn && sub.id){
+    status.textContent = `Notificações ativas neste aparelho (${sub.id.slice(0,8)}).`;
+    btn.textContent = 'Ativado';
+    btn.disabled = true;
+  }
 }
+
+OneSignalDeferred.push(async (OneSignal) => {
+  try{
+    await OneSignal.init({
+      appId: ONESIGNAL_APP_ID,
+      // O site vive em /FlyAlert/, não na raiz do domínio.
+      serviceWorkerPath: 'FlyAlert/OneSignalSDKWorker.js',
+      serviceWorkerParam: { scope: '/FlyAlert/' },
+      allowLocalhostAsSecureOrigin: true,
+    });
+    OS = OneSignal;
+    refreshPush();
+    OneSignal.User.PushSubscription.addEventListener('change', refreshPush);
+  }catch(e){
+    status.textContent = `Falha ao iniciar o serviço de notificação: ${e.message}`;
+  }
+});
+
+// O worker do OneSignal ja cuida do escopo /FlyAlert/.
+// Um segundo worker aqui competiria por ele, entao fica de fora.
 </script>
 </body>
 </html>
