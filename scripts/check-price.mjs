@@ -17,7 +17,8 @@ const {
 const COOLDOWN_HOURS = 20;   // não repete alerta antes disso
 const REALERT_DROP = 0.05;   // ...a menos que caia mais 5% do último alerta
 const JANELA_DIAS = 30;      // referência: mínimo observado nesse período
-const QUEDA_MINIMA = 30;     // em R$ — ignora queda insignificante
+const MAX_OFERTAS = 5;       // quantas opções guardar para comparação
+const QUEDA_MINIMA = 50;     // em R$ — ignora queda insignificante
 
 for (const [k, v] of Object.entries({ SERPAPI_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
   if (!v) {
@@ -71,6 +72,27 @@ async function fetchPrice(watch) {
   const offers = [...(data.best_flights ?? []), ...(data.other_flights ?? [])];
   if (!offers.length) return null;
 
+  const resumo = (o) => {
+    const pernas = o.flights ?? [];
+    const primeira = pernas[0] ?? {};
+    const ultima = pernas[pernas.length - 1] ?? {};
+    const cias = [...new Set(pernas.map(f => f.airline).filter(Boolean))];
+    return {
+      price: o.price,
+      airlines: cias,
+      duration_min: o.total_duration ?? null,
+      stops: Math.max(pernas.length - 1, 0),
+      departure: primeira.departure_airport?.time ?? null,
+      departure_id: primeira.departure_airport?.id ?? null,
+      arrival: ultima.arrival_airport?.time ?? null,
+    };
+  };
+
+  const melhores = [...offers]
+    .sort((a, b) => a.price - b.price)
+    .slice(0, MAX_OFERTAS)
+    .map(resumo);
+
   const cheapest = offers.reduce((a, b) => (b.price < a.price ? b : a));
   const insights = data.price_insights ?? {};
   const [typicalLow, typicalHigh] = insights.typical_price_range ?? [null, null];
@@ -84,6 +106,7 @@ async function fetchPrice(watch) {
     airline: cheapest.flights?.[0]?.airline ?? null,
     duration_min: cheapest.total_duration ?? null,
     booking_url: data.search_metadata?.google_flights_url ?? null,
+    offers: melhores,
     raw: { insights, flights: cheapest.flights ?? [] },
   };
 }
