@@ -232,8 +232,9 @@ OneSignalDeferred.push(async (OneSignal) => {
   await OneSignal.init({ appId: ONESIGNAL_APP_ID, allowLocalhostAsSecureOrigin:true });
 
   const refresh = () => {
-    if(OneSignal.User.PushSubscription.optedIn){
-      status.textContent = 'Notificações ativas neste aparelho.';
+    const sub = OneSignal.User.PushSubscription;
+    if(sub.optedIn && sub.id){
+      status.textContent = `Notificações ativas neste aparelho (${sub.id.slice(0,8)}).`;
       btn.textContent = 'Ativado';
       btn.disabled = true;
     }
@@ -243,11 +244,27 @@ OneSignalDeferred.push(async (OneSignal) => {
 
   btn.addEventListener('click', async () => {
     btn.disabled = true;
+    status.textContent = 'Registrando este aparelho...';
     try{
-      await OneSignal.Notifications.requestPermission();
+      if(Notification.permission !== 'granted'){
+        await OneSignal.Notifications.requestPermission();
+      }
+      if(Notification.permission === 'denied'){
+        status.textContent = 'Permissão bloqueada. Libere as notificações nas configurações do site, no navegador, e tente de novo.';
+        btn.disabled = false;
+        return;
+      }
+      // Permissão concedida não basta: é preciso inscrever de fato.
+      await OneSignal.User.PushSubscription.optIn();
+
+      // O registro é assíncrono; espera até uns 6s pelo id da inscrição.
+      for(let i=0; i<12 && !OneSignal.User.PushSubscription.id; i++){
+        await new Promise(r => setTimeout(r, 500));
+      }
       refresh();
+
       if(!OneSignal.User.PushSubscription.optedIn){
-        status.textContent = 'Permissão negada. Libere as notificações nas configurações do navegador e tente de novo.';
+        status.textContent = 'O aparelho não completou o registro. Recarregue a página e tente mais uma vez.';
         btn.disabled = false;
       }
     }catch(e){
