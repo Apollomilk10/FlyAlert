@@ -2,8 +2,9 @@ name: Checar preços
 
 on:
   schedule:
-    # A cada 6h (UTC). ~124 buscas/mês por rota — cabe no free tier do SerpApi.
-    - cron: '17 1,7,13,19 * * *'
+    # 3x/dia (UTC) = 22h17, 06h17 e 14h17 em Brasília.
+    # 2 rotas x 3 consultas x 31 dias = 186 buscas/mês — cabe nas 250 do free tier.
+    - cron: '17 1,9,17 * * *'
   workflow_dispatch:        # botão pra rodar na mão
 
 concurrency:
