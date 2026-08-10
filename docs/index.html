@@ -24,11 +24,6 @@
   html,body{margin:0}
   body{
     background:var(--paper);
-    /* malha de carta aeronáutica */
-    background-image:
-      linear-gradient(var(--rule) 1px, transparent 1px),
-      linear-gradient(90deg, var(--rule) 1px, transparent 1px);
-    background-size:96px 96px;
     color:var(--ink);
     font-family:'IBM Plex Sans',system-ui,sans-serif;
     -webkit-font-smoothing:antialiased;
@@ -104,6 +99,13 @@
   .opcoes tr:first-child .val{color:var(--magenta)}
   .opcoes .direto{color:var(--cyan)}
 
+  .agenda{
+    margin-top:14px;padding-top:12px;border-top:1px solid var(--rule);
+    font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.8;
+    color:var(--ink-soft);
+  }
+  .agenda b{color:var(--ink);font-weight:600;letter-spacing:.06em}
+
   .panel{
     border:2px solid var(--ink);background:var(--paper-deep);
     padding:18px;margin-top:32px;
@@ -137,9 +139,14 @@
 <div id="watches"></div>
 
 <div class="panel">
-  <div class="eyebrow">Notificações · build 6</div>
+  <div class="eyebrow">Notificações · build 7</div>
   <p id="pushStatus">Ative para receber um aviso no celular assim que a tarifa cair.</p>
   <button id="pushBtn">Ativar notificações</button>
+  <div class="agenda">
+    Consulta o preço 4x por dia: <b>04h · 10h · 16h · 22h</b> (Brasília).<br>
+    O aviso só chega quando a tarifa cai <b>mais de R$ 50</b> abaixo do menor
+    preço dos últimos 30 dias — pode ficar dias em silêncio.
+  </div>
 </div>
 
 <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
