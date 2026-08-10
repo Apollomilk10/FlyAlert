@@ -19,6 +19,7 @@ const REALERT_DROP = 0.05;   // ...a menos que caia mais 5% do último alerta
 const JANELA_DIAS = 30;      // referência: mínimo observado nesse período
 const MAX_OFERTAS = 5;       // quantas opções guardar para comparação
 const QUEDA_MINIMA = 50;     // em R$ — ignora queda insignificante
+const AVISAR_SEMPRE = true;  // true = push a cada consulta, mesmo sem queda
 
 for (const [k, v] of Object.entries({ SERPAPI_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
   if (!v) {
@@ -119,38 +120,41 @@ async function shouldAlert(watch, reading) {
     `price_checks?watch_id=eq.${watch.id}&checked_at=gte.${desde}&select=price&order=price.asc&limit=1`
   );
   const minimo30 = janela[0] != null ? Number(janela[0].price) : null;
+  const queda = minimo30 != null ? minimo30 - reading.price : 0;
 
-  // Primeira leitura da janela: não há com o que comparar.
-  if (minimo30 == null) {
-    console.log('  sem histórico nos últimos 30 dias — apenas registrando');
-    return null;
+  if (minimo30 != null) {
+    console.log(`  mínimo de ${JANELA_DIAS} dias: ${money(minimo30, reading.currency)} (diferença: ${queda >= 0 ? '-' : '+'}${money(Math.abs(queda), reading.currency)})`);
+  } else {
+    console.log('  primeira leitura da janela de 30 dias');
   }
 
-  const queda = minimo30 - reading.price;
-  console.log(`  mínimo de ${JANELA_DIAS} dias: ${money(minimo30, reading.currency)} (diferença: ${queda >= 0 ? '-' : '+'}${money(Math.abs(queda), reading.currency)})`);
+  const bateuMeta = minimo30 != null && queda >= QUEDA_MINIMA;
 
-  if (queda < QUEDA_MINIMA) return null;
+  if (!AVISAR_SEMPRE && !bateuMeta) return null;
 
-  // Cooldown: já avisei disso recentemente?
-  const since = new Date(Date.now() - COOLDOWN_HOURS * 3600_000).toISOString();
-  const recent = await sb(
-    `alerts_sent?watch_id=eq.${watch.id}&sent_at=gte.${since}&select=price&order=sent_at.desc&limit=1`
-  );
-  if (recent.length) {
-    const lastAlertPrice = Number(recent[0].price);
-    if (reading.price > lastAlertPrice * (1 - REALERT_DROP)) {
-      console.log(`  silenciado (avisei ${lastAlertPrice} há menos de ${COOLDOWN_HOURS}h)`);
-      return null;
+  // O cooldown existe para não repetir o mesmo alerta de queda.
+  // Com AVISAR_SEMPRE ligado ele não se aplica: o push é um informe de rotina.
+  if (!AVISAR_SEMPRE) {
+    const since = new Date(Date.now() - COOLDOWN_HOURS * 3600_000).toISOString();
+    const recent = await sb(
+      `alerts_sent?watch_id=eq.${watch.id}&sent_at=gte.${since}&select=price&order=sent_at.desc&limit=1`
+    );
+    if (recent.length) {
+      const lastAlertPrice = Number(recent[0].price);
+      if (reading.price > lastAlertPrice * (1 - REALERT_DROP)) {
+        console.log(`  silenciado (avisei ${lastAlertPrice} há menos de ${COOLDOWN_HOURS}h)`);
+        return null;
+      }
     }
   }
 
-  return { reason: 'minimo_30d', minimo30, queda };
+  return {
+    reason: bateuMeta ? 'minimo_30d' : 'acompanhamento',
+    minimo30,
+    queda,
+    bateuMeta,
+  };
 }
-
-// ---------- Push ----------
-
-const money = (v, currency) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency }).format(v);
 
 async function enviar(payload) {
   const res = await fetch('https://api.onesignal.com/notifications', {
@@ -166,10 +170,24 @@ async function enviar(payload) {
 }
 
 async function sendPush(watch, reading, veredito) {
-  const { minimo30, queda } = veredito;
+  const { minimo30, queda, bateuMeta } = veredito;
+  const cur = reading.currency;
+  const delta = Math.abs(queda);
+
   // Preço primeiro: o Android corta o fim do título.
-  const title = `${money(reading.price, reading.currency)} · ${watch.label}`;
-  const body = `${money(queda, reading.currency)} abaixo do mínimo dos últimos ${JANELA_DIAS} dias (${money(minimo30, reading.currency)}).`;
+  const marca = bateuMeta ? '↓ ' : '';
+  const title = `${marca}${money(reading.price, cur)} · ${watch.label}`;
+
+  let body;
+  if (minimo30 == null) {
+    body = 'Primeira leitura — começando o histórico de 30 dias.';
+  } else if (queda > 0) {
+    body = `${money(delta, cur)} abaixo do mínimo de ${JANELA_DIAS} dias (${money(minimo30, cur)}).`;
+  } else if (queda === 0) {
+    body = `Empatado com o mínimo de ${JANELA_DIAS} dias (${money(minimo30, cur)}).`;
+  } else {
+    body = `${money(delta, cur)} acima do mínimo de ${JANELA_DIAS} dias (${money(minimo30, cur)}).`;
+  }
 
   if (!ONESIGNAL_APP_ID || !ONESIGNAL_API_KEY) {
     console.log(`  [sem OneSignal configurado] ${title} / ${body}`);
