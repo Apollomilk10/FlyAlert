@@ -114,6 +114,9 @@ async function fetchPrice(watch) {
 
 // ---------- Decisão: isso é uma barganha? ----------
 
+const money = (v, currency = 'BRL') =>
+  new Intl.NumberFormat('pt-BR', { style: 'currency', currency }).format(v);
+
 async function shouldAlert(watch, reading) {
   const desde = new Date(Date.now() - JANELA_DIAS * 86400_000).toISOString();
   const janela = await sb(
