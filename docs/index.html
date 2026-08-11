@@ -160,7 +160,7 @@
 <div id="watches"></div>
 
 <div class="panel">
-  <div class="eyebrow">Notificações · build 11</div>
+  <div class="eyebrow">Notificações · build 12</div>
   <p id="pushStatus">Ative para receber um aviso no celular assim que a tarifa cair.</p>
   <button id="pushBtn">Ativar notificações</button>
   <div class="agenda">
@@ -180,6 +180,14 @@ const ONESIGNAL_APP_ID = '11593a31-7feb-45b9-aad9-5d1eb46bf1c7';
 
 const brl = (v, c='BRL') =>
   new Intl.NumberFormat('pt-BR',{style:'currency',currency:c,maximumFractionDigits:0}).format(v);
+const janela = t => {
+  if(!t) return '';
+  const [i,f] = t.split(',');
+  const faixa = `${i}h–${f}h`;
+  const h = Number(i);
+  const nome = h >= 18 ? 'noite' : h >= 12 ? 'tarde' : 'manhã';
+  return ` · sai de ${nome} (${faixa})`;
+};
 const noites = (a,b) =>
   Math.round((new Date(b+'T12:00:00') - new Date(a+'T12:00:00'))/86400000);
 const dia = d => new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'short'});
@@ -346,7 +354,7 @@ function cardHTML(w, checks){
     <div class="dates">
       ${w.return_date
         ? `ida ${dia(w.outbound_date)} · volta ${dia(w.return_date)} · ${noites(w.outbound_date, w.return_date)} noites`
-        : `ida ${dia(w.outbound_date)} · só ida`}
+        : `ida ${dia(w.outbound_date)} · só ida`}${janela(w.outbound_times)}
       ${w.target_price? ' · teto '+brl(w.target_price, atual.currency):''}</div>
 
     <div class="now">
