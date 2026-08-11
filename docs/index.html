@@ -74,7 +74,7 @@
   .meta{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);line-height:1.7}
 
   /* corredor: faixa tipica sombreada + linha do preço */
-  .corridor{width:100%;height:132px;display:block;margin:16px 0 8px}
+  .corridor{width:100%;height:auto;display:block;margin:18px 0 8px;overflow:visible}
   .legend{
     font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;
     text-transform:uppercase;color:var(--ink-soft);display:flex;gap:16px;flex-wrap:wrap;
@@ -160,7 +160,7 @@
 <div id="watches"></div>
 
 <div class="panel">
-  <div class="eyebrow">Notificações · build 10</div>
+  <div class="eyebrow">Notificações · build 11</div>
   <p id="pushStatus">Ative para receber um aviso no celular assim que a tarifa cair.</p>
   <button id="pushBtn">Ativar notificações</button>
   <div class="agenda">
@@ -180,6 +180,8 @@ const ONESIGNAL_APP_ID = '11593a31-7feb-45b9-aad9-5d1eb46bf1c7';
 
 const brl = (v, c='BRL') =>
   new Intl.NumberFormat('pt-BR',{style:'currency',currency:c,maximumFractionDigits:0}).format(v);
+const noites = (a,b) =>
+  Math.round((new Date(b+'T12:00:00') - new Date(a+'T12:00:00'))/86400000);
 const dia = d => new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'short'});
 
 async function api(path){
@@ -190,29 +192,65 @@ async function api(path){
   return r.json();
 }
 
-// Gráfico: a faixa típica vira um corredor sombreado; o preço é a rota atravessando.
+// Gráfico: histórico no tempo, com média de 30 dias tracejada.
 function corridor(checks, low, high){
-  const W=680, H=132, P=8;
-  const prices = checks.map(c=>Number(c.price));
-  const min = Math.min(...prices, low ?? Infinity)*0.97;
-  const max = Math.max(...prices, high ?? -Infinity)*1.03;
-  const y = v => P + (H-2*P) * (1 - (v-min)/(max-min));
-  const x = i => prices.length<2 ? W/2 : (i/(prices.length-1))*W;
-  const line = prices.map((p,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(p).toFixed(1)}`).join(' ');
+  const W=680, H=190, PT=14, PB=26, PL=0, PR=64;
 
-  const band = (low!=null && high!=null)
-    ? `<rect x="0" y="${y(high).toFixed(1)}" width="${W}" height="${(y(low)-y(high)).toFixed(1)}"
-         fill="#2F7D95" opacity=".14"/>
-       <line x1="0" y1="${y(low).toFixed(1)}" x2="${W}" y2="${y(low).toFixed(1)}"
-         stroke="#2F7D95" stroke-width="1" stroke-dasharray="6 4"/>` : '';
+  const pts = checks.map(c => ({
+    t: new Date(c.checked_at).getTime(),
+    v: Number(c.price),
+    live: c.source !== 'google_history',
+  })).sort((a,b) => a.t - b.t);
 
-  const last = prices.at(-1);
-  return `<svg class="corridor" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
-            aria-label="Histórico de preços comparado com a faixa normal">
-    ${band}
-    <path d="${line}" fill="none" stroke="#B5177E" stroke-width="2.5"
-          stroke-linejoin="round" stroke-linecap="round"/>
-    <circle cx="${x(prices.length-1).toFixed(1)}" cy="${y(last).toFixed(1)}" r="5" fill="#B5177E"/>
+  const vals = pts.map(p => p.v);
+  const t0 = pts[0].t, t1 = pts[pts.length-1].t;
+
+  // Média dos últimos 30 dias.
+  const corte = Date.now() - 30*86400_000;
+  const j30 = pts.filter(p => p.t >= corte).map(p => p.v);
+  const media = (j30.length ? j30 : vals).reduce((a,b)=>a+b,0) / (j30.length || vals.length);
+
+  const candidatos = [...vals, media, low, high].filter(v => v != null);
+  const lo = Math.min(...candidatos) * 0.97;
+  const hi = Math.max(...candidatos) * 1.03;
+
+  const y = v => PT + (H-PT-PB) * (1 - (v-lo)/(hi-lo));
+  const x = t => t1 === t0 ? (W-PR)/2 : ((t-t0)/(t1-t0)) * (W-PR-PL) + PL;
+
+  const caminho = seg => seg.map((p,i) => `${i?'L':'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+
+  // Importado e medido são séries visualmente distintas.
+  const hist = pts.filter(p => !p.live);
+  const live = pts.filter(p => p.live);
+  const ponte = hist.length && live.length ? [hist[hist.length-1], live[0]] : [];
+
+  const banda = (low!=null && high!=null)
+    ? `<rect x="0" y="${y(high).toFixed(1)}" width="${W-PR}" height="${(y(low)-y(high)).toFixed(1)}" fill="#2F7D95" opacity=".10"/>`
+    : '';
+
+  const atual = pts[pts.length-1];
+  const rotulo = (v, cor, texto) => `
+    <line x1="0" y1="${y(v).toFixed(1)}" x2="${(W-PR).toFixed(1)}" y2="${y(v).toFixed(1)}"
+      stroke="${cor}" stroke-width="1" stroke-dasharray="7 5" opacity=".85"/>
+    <text x="${(W-PR+6).toFixed(1)}" y="${(y(v)+3.5).toFixed(1)}" font-family="IBM Plex Mono, monospace"
+      font-size="10" fill="${cor}">${texto}</text>`;
+
+  const dataFmt = t => new Date(t).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
+
+  return `<svg class="corridor" viewBox="0 0 ${W} ${H}" role="img"
+      aria-label="Histórico de preços com a média dos últimos 30 dias">
+    ${banda}
+    ${rotulo(media, '#5A6862', 'média 30d')}
+    <path d="${caminho(hist)}" fill="none" stroke="#2F7D95" stroke-width="1.5" opacity=".65"
+      stroke-linejoin="round"/>
+    <path d="${caminho(ponte)}" fill="none" stroke="#2F7D95" stroke-width="1.5" opacity=".35"
+      stroke-dasharray="3 3"/>
+    <path d="${caminho(live)}" fill="none" stroke="#B5177E" stroke-width="2.5"
+      stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${x(atual.t).toFixed(1)}" cy="${y(atual.v).toFixed(1)}" r="4.5" fill="#B5177E"/>
+    <text x="0" y="${H-8}" font-family="IBM Plex Mono, monospace" font-size="10" fill="#5A6862">${dataFmt(t0)}</text>
+    <text x="${(W-PR).toFixed(1)}" y="${H-8}" text-anchor="end"
+      font-family="IBM Plex Mono, monospace" font-size="10" fill="#5A6862">${dataFmt(t1)}</text>
   </svg>`;
 }
 
@@ -304,8 +342,11 @@ function cardHTML(w, checks){
   const menor = Math.min(...checks.map(c=>Number(c.price)));
 
   return `<article class="watch">
-    <div class="route">${w.departure_id} <span class="leg">———&gt;</span> ${w.arrival_id}</div>
-    <div class="dates">${dia(w.outbound_date)}${w.return_date? ' — '+dia(w.return_date):' · só ida'}
+    <div class="route">${w.departure_id} <span class="leg">&#8644;</span> ${w.arrival_id}</div>
+    <div class="dates">
+      ${w.return_date
+        ? `ida ${dia(w.outbound_date)} · volta ${dia(w.return_date)} · ${noites(w.outbound_date, w.return_date)} noites`
+        : `ida ${dia(w.outbound_date)} · só ida`}
       ${w.target_price? ' · teto '+brl(w.target_price, atual.currency):''}</div>
 
     <div class="now">
@@ -314,10 +355,12 @@ function cardHTML(w, checks){
     </div>
 
     ${checks.length>1 ? corridor(checks, atual.typical_low, atual.typical_high) : ''}
-    ${atual.typical_low ? `<div class="legend">
-      <span><i style="background:#B5177E"></i>Preço observado</span>
-      <span><i style="background:#2F7D95;opacity:.5"></i>Faixa normal ${brl(atual.typical_low, atual.currency)}–${brl(atual.typical_high, atual.currency)}</span>
-    </div>` : ''}
+    <div class="legend">
+      <span><i style="background:#B5177E"></i>Medido pelo app</span>
+      <span><i style="background:#2F7D95;opacity:.65"></i>Histórico do Google</span>
+      <span><i style="background:#5A6862"></i>Média 30 dias</span>
+      ${atual.typical_low ? `<span><i style="background:#2F7D95;opacity:.25"></i>Faixa normal</span>` : ''}
+    </div>
 
     ${indicadores(checks, atual.currency)}
 
