@@ -199,7 +199,7 @@ Settings → Secrets and variables → Actions:
 | `ONESIGNAL_SUBSCRIPTION_ID` | opcional — mira um aparelho específico |
 
 ### 5. Front
-Preencha as três constantes no topo do `docs/index.html` e publique a pasta
+Preencha as três constantes no topo do `docs/app.js` e publique a pasta
 `docs/` no GitHub Pages (Settings → Pages → branch `main`, pasta `/docs`).
 
 ### 6. Testar
