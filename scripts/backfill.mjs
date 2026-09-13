@@ -46,6 +46,9 @@ async function historico(watch, aeroporto) {
     gl: 'br',
     api_key: SERPAPI_KEY,
   });
+  if (watch.adults && watch.adults > 1) {
+    params.set('adults', String(watch.adults));
+  }
   if (watch.trip_type === 1 && watch.return_date) {
     params.set('return_date', watch.return_date);
   }

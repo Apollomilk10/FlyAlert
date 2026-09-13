@@ -61,3 +61,31 @@ create policy "leitura publica de price_checks"
 -- Exemplo de rota. Ajuste e rode.
 -- insert into watches (label, departure_id, arrival_id, outbound_date, return_date, target_price)
 -- values ('GRU -> LIS', 'GRU', 'LIS', '2027-01-15', '2027-02-05', 3500);
+
+-- ---------------------------------------------------------------
+-- App (visual Figma): passageiros por rota + o que a chave anônima pode fazer.
+-- ---------------------------------------------------------------
+alter table watches add column if not exists adults smallint not null default 1;
+
+create policy "leitura publica de alerts_sent"
+  on alerts_sent for select using (true);
+
+-- O app cria alertas, com limites sanitários.
+create policy "app cria watches" on watches for insert with check (
+  currency = 'BRL'
+  and adults between 1 and 9
+  and trip_type in (1,2)
+  and outbound_date >= current_date
+  and outbound_date <= current_date + interval '400 days'
+);
+
+-- Pausar/retomar e mexer no teto. Nada além disso.
+create policy "app atualiza watches" on watches for update using (true) with check (true);
+revoke update, delete on watches from anon;
+grant update (active, target_price) on watches to anon;
+grant insert on watches to anon;
+
+-- RLS não cobre TRUNCATE: o privilégio sai na unha.
+revoke truncate on watches, price_checks, alerts_sent from anon, authenticated;
+revoke delete, insert, update on price_checks, alerts_sent from anon, authenticated;
+revoke delete, update, insert on watches from authenticated;

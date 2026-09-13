@@ -62,6 +62,9 @@ async function fetchPrice(watch) {
   if (watch.trip_type === 1 && watch.return_date) {
     params.set('return_date', watch.return_date);
   }
+  if (watch.adults && watch.adults > 1) {
+    params.set('adults', String(watch.adults));
+  }
   if (watch.outbound_times) {
     params.set('outbound_times', watch.outbound_times);
   }
