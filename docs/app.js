@@ -14,10 +14,6 @@ const num = (v) => new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 }).
 const D = (d) => new Date(`${d}T12:00:00`);
 const diaMes = (d) => D(d).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '');
 const dataLonga = (d) => D(d).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }).replace('.', '');
-const mesAno = (d) => {
-  const s = D(d).toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }).replace('.', '');
-  return s.charAt(0).toUpperCase() + s.slice(1);
-};
 const hhmm = (t) => (t ? String(t).split(' ')[1]?.slice(0, 5) ?? '' : '');
 const durStr = (m) => (m == null ? '—' : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}min`);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -36,6 +32,9 @@ const cidade = (ids) => {
   return nomes[0];
 };
 const rota = (w) => `${cidade(w.departure_id)} → ${cidade(w.arrival_id)}`;
+const periodo = (w) => w.return_date
+  ? `${diaMes(w.outbound_date)} → ${diaMes(w.return_date)} ${D(w.return_date).getFullYear()}`
+  : `${diaMes(w.outbound_date)} ${D(w.outbound_date).getFullYear()}`;
 const sigla = (ids) => String(ids).split(',')[0].trim();
 
 const GRADS = [
@@ -183,7 +182,7 @@ function badge(pct) {
 
 function chart(pts, { alto = false } = {}) {
   if (!pts || pts.length < 2) return `<p class="muted small">Ainda sem histórico suficiente para o gráfico.</p>`;
-  const W = 360, H = alto ? 190 : 165, PL = 46, PR = 34, PT = 16, PB = 24;
+  const W = 360, H = alto ? 200 : 175, PL = 46, PR = 44, PT = 16, PB = 24;
 
   // reamostra para no máximo 26 pontos, mantendo o primeiro e o último
   const passo = Math.max(1, Math.ceil(pts.length / 26));
@@ -191,7 +190,21 @@ function chart(pts, { alto = false } = {}) {
   if (p[p.length - 1] !== pts[pts.length - 1]) p.push(pts[pts.length - 1]);
 
   const vals = p.map((d) => d.v);
-  const lo = Math.min(...vals), hi = Math.max(...vals);
+
+  // Médias dos últimos 30/60/90 dias. Uma janela só entra se trouxer leitura
+  // que a anterior não tinha — senão vira linha duplicada em cima da outra.
+  const agora = Date.now();
+  const medias = [];
+  let antes = 0;
+  for (const [dias, cor] of [[30, '#15A05A'], [60, '#C97A05'], [90, '#7A5AD6']]) {
+    const janela = pts.filter((d) => agora - d.t <= dias * DIA);
+    if (janela.length < 2 || janela.length === antes) continue;
+    antes = janela.length;
+    medias.push({ dias, cor, v: janela.reduce((a, d) => a + d.v, 0) / janela.length });
+  }
+
+  const extremos = [...vals, ...medias.map((m) => m.v)];
+  const lo = Math.min(...extremos), hi = Math.max(...extremos);
   const pad = (hi - lo) * 0.18 || Math.max(60, lo * 0.05);
   const y0 = lo - pad, y1 = hi + pad;
   const t0 = p[0].t, t1 = p[p.length - 1].t;
@@ -215,6 +228,12 @@ function chart(pts, { alto = false } = {}) {
     `<text x="${X(d.t).toFixed(1)}" y="${H - 6}" text-anchor="middle" font-size="9.5" fill="#8A99AD">${new Date(d.t).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</text>`
   ).join('');
 
+  const linhasMedia = medias.map((m) => `
+    <line x1="${PL}" y1="${Y(m.v).toFixed(1)}" x2="${W - PR}" y2="${Y(m.v).toFixed(1)}"
+      stroke="${m.cor}" stroke-width="1.3" stroke-dasharray="6 4" opacity=".9"/>
+    <text x="${W - PR + 5}" y="${(Y(m.v) + 3.5).toFixed(1)}" font-size="9"
+      font-weight="700" fill="${m.cor}">${m.dias}d</text>`).join('');
+
   const fim = p[p.length - 1];
   const bx = Math.min(X(fim.t) + 6, W - PR - 4), by = Math.max(Y(fim.v) - 12, PT);
   const rotulo = `<g><rect x="${bx}" y="${by - 10}" width="62" height="21" rx="6" fill="#1D6FE8"/>
@@ -226,9 +245,12 @@ function chart(pts, { alto = false } = {}) {
     </linearGradient></defs>
     ${grade}
     <path d="${area}" fill="url(#g1)"/>
+    ${linhasMedia}
     <path d="${linha}" fill="none" stroke="#1D6FE8" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
     ${pontos}${datas}${rotulo}
-  </svg>`;
+  </svg>
+  ${medias.length ? `<div class="legend">${medias.map((m) =>
+    `<span><i style="background:${m.cor}"></i>Média ${m.dias}d · ${brl(m.v)}</span>`).join('')}</div>` : ''}`;
 }
 
 /* ---------------- componentes ---------------- */
@@ -254,7 +276,8 @@ function linhaAlerta(w, { toggle = false } = {}) {
     </button>
     <button class="info" data-go="#/alerta/${w.id}">
       <b>${esc(rota(w))}</b>
-      <small>${mesAno(w.outbound_date)} · ${pax} · ${w.return_date ? 'ida e volta' : 'só ida'}</small>
+      <small class="datas">${periodo(w)}</small>
+      <small>${pax} · ${w.return_date ? 'ida e volta' : 'só ida'}</small>
       <span class="price">${preco} ${dist}</span>
     </button>
     ${controle}
