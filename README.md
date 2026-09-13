@@ -3,15 +3,14 @@
 Cansei de abrir o Google Flights toda semana pra ver se a passagem tinha caído.
 Montei isso pra ele me avisar sozinho.
 
-O FlyAlert consulta rotas fixas de tempos em tempos, guarda o histórico de preço
+O FlyAlert consulta as rotas de tempos em tempos, guarda o histórico de preço
 e manda um push no meu celular quando a tarifa fica mais barata do que qualquer
-valor visto nos últimos 30 dias.
+valor visto nos últimos 30 dias. O app é um PWA de 10 telas onde dá pra criar,
+pausar e acompanhar cada rota.
 
 **Custo mensal: R$ 0.** Roda inteiro em free tier — sem servidor, sem cartão.
 
 <p align="center">
-  <img src="docs/img/app.jpg" width="420" alt="Tela do FlyAlert mostrando a rota GRU,CGH,VCP para SSA a R$ 1.935">
-  &nbsp;&nbsp;
   <img src="docs/img/push.jpg" width="420" alt="Notificação do FlyAlert na tela de bloqueio do Android">
 </p>
 
@@ -24,7 +23,7 @@ Actions que acorda, faz seu trabalho em 10 segundos e morre.
 
 ```mermaid
 flowchart LR
-    subgraph agendador["GitHub Actions · cron 4x/dia"]
+    subgraph agendador["GitHub Actions · cron 3x/dia"]
         script["check-price.mjs"]
     end
 
@@ -36,7 +35,7 @@ flowchart LR
 
     serp["SerpApi<br/>Google Flights"]
     onesignal["OneSignal<br/>Web Push"]
-    pwa["PWA<br/>GitHub Pages"]
+    pwa["PWA<br/>Vercel"]
     fone(["Celular"])
 
     script -->|"1· lê rotas ativas"| watches
@@ -46,6 +45,7 @@ flowchart LR
     script -->|"5· dispara push"| onesignal
     onesignal --> fone
     pwa -->|"leitura pública via RLS"| checks
+    pwa -->|"cria e pausa rotas"| watches
     pwa -->|"inscreve o aparelho"| onesignal
 
     style script fill:#B5177E,color:#fff
@@ -61,7 +61,7 @@ flowchart LR
 | **Supabase** | Histórico | Postgres de verdade no free tier, com REST pronta e RLS para expor leitura sem backend |
 | **SerpApi** | Preços | A Amadeus Self-Service foi descontinuada em julho/2026. Google Flights cobre LATAM, GOL, Azul e OTAs locais |
 | **OneSignal** | Push | Web Push puro exige gerenciar chaves VAPID e service worker na mão. Free tier ilimitado pro meu volume |
-| **GitHub Pages** | PWA | Estático, HTTPS de graça — requisito do Web Push |
+| **Vercel** | PWA | Estático, HTTPS de graça (requisito do Web Push) e deploy a cada push no `main` |
 
 ---
 
@@ -122,6 +122,7 @@ erDiagram
         date return_date
         text outbound_times "4,10 = decola entre 4h e 10h"
         numeric target_price "opcional"
+        smallint adults "passageiros"
         boolean active
     }
     price_checks {
@@ -149,18 +150,32 @@ extra. Como moro em Campinas, deixar VCP no páreo muda bastante a conta.
 
 ---
 
-## O que aparece no app
+## O app
 
-- **Preço atual** e o menor já registrado
-- **Gráfico de linha** com o histórico; quando o Google devolve a faixa de preço
-  típica, ela aparece como um corredor sombreado ao fundo
-- **Tabela comparativa** com as 5 opções mais baratas — preço, companhia,
-  duração, paradas e horário de saída, com a diferença em reais em relação à
-  primeira. É o que deixa ver o trade-off: às vezes R$ 150 a mais cortam três
-  horas de conexão
+SPA de arquivo único por responsabilidade — `docs/index.html` é só a casca, as
+telas moram em `docs/app.js` e o design system em `docs/styles.css`. Navegação
+por hash, sem build step e sem framework.
 
-O visual é inspirado em carta aeronáutica: papel verde-acinzentado, malha de
-grade, magenta de aerovia.
+| Tela | Rota | O que faz |
+|---|---|---|
+| Splash | `#/` | Abertura; some depois do primeiro toque |
+| Início | `#/home` | Economia dos últimos 30 dias, contadores e prévia dos alertas |
+| Meus alertas | `#/alertas` | Ativos e inativos, com o toggle que pausa a rota no banco |
+| Detalhe | `#/alerta/:id` | Preço atual, variação, menor já visto e gráfico |
+| Histórico | `#/historico/:id` | Gráfico ampliado, média/máximo/leituras e dicas de compra |
+| Novo alerta | `#/novo` | Origem, destino, datas, passageiros, teto e janela de partida |
+| Filtros | `#/filtros` | Escalas, horário de partida e companhias (aplicados às ofertas) |
+| Notificações | `#/notificacoes` | Liga/desliga o push e lista os avisos já enviados |
+| Minha viagem | `#/viagem/:id` | As 5 ofertas da última consulta, com horários e conexões |
+| Perfil | `#/perfil` | Atalhos para o resto do app |
+
+O número em destaque na home é a diferença entre o preço de hoje e a média de 30
+dias de cada rota, somada. A comparação **por oferta** — preço, companhia,
+duração, paradas e horário — está na tela da viagem: às vezes R$ 150 a mais
+cortam três horas de conexão.
+
+O visual segue o Figma do app: azul de aviação sobre fundo claro, cartões
+arredondados e gráfico de área.
 
 ---
 
@@ -199,8 +214,16 @@ Settings → Secrets and variables → Actions:
 | `ONESIGNAL_SUBSCRIPTION_ID` | opcional — mira um aparelho específico |
 
 ### 5. Front
-Preencha as três constantes no topo do `docs/app.js` e publique a pasta
-`docs/` no GitHub Pages (Settings → Pages → branch `main`, pasta `/docs`).
+Preencha as três constantes no topo do `docs/app.js`. O deploy sai pelo Vercel:
+importe o repositório e pronto — o `vercel.json` na raiz já aponta a saída pra
+pasta `docs/`, e cada push no `main` publica em produção. O GitHub Pages também
+funciona (Settings → Pages → branch `main`, pasta `/docs`); o app descobre o
+escopo sozinho e roda dos dois jeitos.
+
+O `db/schema.sql` traz, no fim, as permissões que o app precisa: a chave anônima
+pode criar rotas e alterar **só** `active` e `target_price`. `DELETE`, `TRUNCATE`
+e escrita em `price_checks` ficam de fora — vale lembrar que RLS não cobre
+`TRUNCATE`, o privilégio tem que ser revogado na mão.
 
 ### 6. Testar
 Actions → "Checar preços" → Run workflow. Depois abra o site no celular, ative as
@@ -216,14 +239,17 @@ Pra testar sem enviar push: `DRY_RUN=true node scripts/check-price.mjs`.
 domínio e procura o worker em `/OneSignalSDKWorker.js`. Num projeto do GitHub
 Pages o site vive em `/FlyAlert/`, e o SDK toma 404 — mas falha silenciosamente,
 sem nem anexar o listener do botão. Passar `serviceWorkerPath` não basta: sem
-`serviceWorkerOverrideForTypical: true` o SDK ignora o campo.
+`serviceWorkerOverrideForTypical: true` o SDK ignora o campo. Como o app roda em
+Vercel (raiz) e em Pages (subpasta), o escopo é calculado em runtime:
 
 ```js
+const BASE = location.pathname.replace(/[^/]*$/, '');   // '/' ou '/FlyAlert/'
+
 await OneSignal.init({
   appId: ONESIGNAL_APP_ID,
   serviceWorkerOverrideForTypical: true,
-  serviceWorkerPath: 'FlyAlert/OneSignalSDKWorker.js',
-  serviceWorkerParam: { scope: '/FlyAlert/' },
+  serviceWorkerPath: `${BASE.replace(/^\//, '')}OneSignalSDKWorker.js`,
+  serviceWorkerParam: { scope: BASE },
 });
 ```
 
@@ -241,15 +267,16 @@ vai na frente: `R$ 1.700 · São Paulo → Salvador`, não o contrário.
 **Cron pausado.** Workflow agendado em repo público é desativado após 60 dias sem
 commits. Qualquer commit reativa.
 
-**Fuso.** O cron do Actions é UTC. `17 1,7,13,19 * * *` = 22h, 4h, 10h e 16h em
+**Fuso.** O cron do Actions é UTC. `17 1,9,17 * * *` = 22h, 06h e 14h em
 Brasília.
 
 ---
 
 ## Consumo de cota
 
-1 rota × 4 consultas/dia ≈ **124 buscas/mês**. Ao adicionar rotas, ajuste o cron
-em `.github/workflows/check-price.yml` pra não estourar o free tier.
+1 rota × 3 consultas/dia ≈ **93 buscas/mês** — com as 5 rotas de hoje, ~465.
+Cada alerta criado pelo app entra nessa conta, então ao adicionar rotas ajuste o
+cron em `.github/workflows/check-price.yml` pra não estourar o free tier.
 
 ## Limitações conhecidas
 
@@ -259,5 +286,9 @@ em `.github/workflows/check-price.yml` pra não estourar o free tier.
   origem ou datas distantes, a faixa típica vem nula.
 - **iOS**: push só funciona com o site adicionado à tela de início (16.4+). No
   Android funciona pelo navegador normal.
+- Criar e pausar alertas pelo app usa a chave anônima, que é pública. As policies
+  limitam o estrago (só BRL, até 9 passageiros, data até 400 dias à frente, e
+  nada de apagar), mas quem tiver a URL pode criar rotas e queimar cota da
+  SerpApi. Pra fechar de vez, seria preciso autenticação de verdade.
 - O free tier do Supabase pausa projetos inativos. O cron a cada 6h mantém o
   projeto vivo, mas se o monitoramento parar por dias, é preciso reativar no painel.
