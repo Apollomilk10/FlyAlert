@@ -32,6 +32,15 @@ const cidade = (ids) => {
   return nomes[0];
 };
 const rota = (w) => `${cidade(w.departure_id)} → ${cidade(w.arrival_id)}`;
+const linkGoogleFlights = (w) => {
+  const q = [
+    `Flights from ${sigla(w.departure_id)} to ${sigla(w.arrival_id)}`,
+    `on ${w.outbound_date}`,
+    w.return_date ? `through ${w.return_date}` : 'oneway',
+    (w.adults || 1) > 1 ? `${w.adults} adults` : '',
+  ].filter(Boolean).join(' ');
+  return `https://www.google.com/travel/flights?q=${encodeURIComponent(q)}&curr=BRL&hl=pt-BR&gl=BR`;
+};
 const periodo = (w) => w.return_date
   ? `${diaMes(w.outbound_date)} → ${diaMes(w.return_date)} ${D(w.return_date).getFullYear()}`
   : `${diaMes(w.outbound_date)} ${D(w.outbound_date).getFullYear()}`;
@@ -644,7 +653,11 @@ function telaViagem(id) {
         <small>${s.atual <= s.min ? 'Este é o menor preço já registrado' : `Você economiza ${brl(s.max - s.atual, w.currency)} em relação ao pico`}</small></div>
     </div>` : ''}
 
-    <button class="btn" style="margin:16px 0" data-go="#/historico/${w.id}">Ver histórico de preços</button>
+    <a class="btn" style="margin-top:16px" href="${linkGoogleFlights(w)}" target="_blank" rel="noopener noreferrer">
+      ${ic('plane', 18)} Ver passagem no Google Flights
+    </a>
+    <p class="hint" style="text-align:center;margin:8px 0 0">Abre a busca já preenchida com a rota, as datas e ${w.adults || 1} passageiro${(w.adults || 1) > 1 ? 's' : ''}.</p>
+    <button class="btn ghost" style="margin:12px 0 0" data-go="#/historico/${w.id}">Ver histórico de preços</button>
   </div>`;
 }
 
