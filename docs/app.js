@@ -95,7 +95,7 @@ const S = {
   filtros: carregarFiltros(),
   carregado: false,
   erro: null,
-  view: { tabAlertas: 'ativos', legAberta: null },
+  view: { tabAlertas: 'ativos', legAberta: null, janela: 'tudo' },
 };
 
 function carregarFiltros() {
@@ -167,6 +167,29 @@ function stats(w) {
   return { atual, media, min, max, pct, quedas, economia: Math.max(0, media - atual), leituras: pts.length, primeiro: pts[0].t };
 }
 
+const JANELAS = [[30, '30d'], [60, '60d'], [90, '90d'], ['tudo', 'Tudo']];
+const CORES_MEDIA = { 30: '#15A05A', 60: '#C97A05', 90: '#7A5AD6' };
+const rotuloJanela = (j) => (j === 'tudo' ? 'período total' : `${j} dias`);
+
+const dentro = (pts, j) => {
+  if (j === 'tudo') return pts;
+  const agora = Date.now();
+  return pts.filter((d) => agora - d.t <= Number(j) * DIA);
+};
+
+function statsJanela(w, j) {
+  const sel = dentro(S.checks[w.id] || [], j);
+  if (!sel.length) return null;
+  const vals = sel.map((d) => d.v);
+  return {
+    media: vals.reduce((a, b) => a + b, 0) / vals.length,
+    max: Math.max(...vals), min: Math.min(...vals), leituras: sel.length,
+  };
+}
+
+const filtroJanela = () => `<div class="tabs light seg">${JANELAS.map(([v, t]) =>
+  `<button class="${String(S.view.janela) === String(v) ? 'on' : ''}" data-janela="${v}">${t}</button>`).join('')}</div>`;
+
 function resumoGeral() {
   const ativos = S.watches.filter((w) => w.active);
   let economia = 0, quedas = 0, potencial = 0, comDados = 0;
@@ -189,8 +212,12 @@ function badge(pct) {
 
 /* ---------------- gráfico ---------------- */
 
-function chart(pts, { alto = false } = {}) {
-  if (!pts || pts.length < 2) return `<p class="muted small">Ainda sem histórico suficiente para o gráfico.</p>`;
+function chart(todos, { alto = false, janela = 'tudo' } = {}) {
+  if (!todos || todos.length < 2) return `<p class="muted small">Ainda sem histórico suficiente para o gráfico.</p>`;
+  const pts = dentro(todos, janela);
+  if (pts.length < 2) {
+    return `<p class="muted small">Só ${pts.length} leitura nos últimos ${janela} dias. Escolha um período maior.</p>`;
+  }
   const W = 360, H = alto ? 200 : 175, PL = 46, PR = 44, PT = 16, PB = 24;
 
   // reamostra para no máximo 26 pontos, mantendo o primeiro e o último
@@ -200,16 +227,17 @@ function chart(pts, { alto = false } = {}) {
 
   const vals = p.map((d) => d.v);
 
-  // Médias dos últimos 30/60/90 dias. Uma janela só entra se trouxer leitura
-  // que a anterior não tinha — senão vira linha duplicada em cima da outra.
-  const agora = Date.now();
+  // Só entram as janelas que cabem no período filtrado, e cada uma precisa
+  // trazer leitura que a anterior não tinha — senão vira linha duplicada.
+  const teto = janela === 'tudo' ? 90 : Number(janela);
   const medias = [];
   let antes = 0;
-  for (const [dias, cor] of [[30, '#15A05A'], [60, '#C97A05'], [90, '#7A5AD6']]) {
-    const janela = pts.filter((d) => agora - d.t <= dias * DIA);
-    if (janela.length < 2 || janela.length === antes) continue;
-    antes = janela.length;
-    medias.push({ dias, cor, v: janela.reduce((a, d) => a + d.v, 0) / janela.length });
+  for (const [dias, cor] of Object.entries(CORES_MEDIA)) {
+    if (Number(dias) > teto) continue;
+    const j = dentro(todos, Number(dias));
+    if (j.length < 2 || j.length === antes) continue;
+    antes = j.length;
+    medias.push({ dias: Number(dias), cor, v: j.reduce((a, d) => a + d.v, 0) / j.length });
   }
 
   const extremos = [...vals, ...medias.map((m) => m.v)];
@@ -400,7 +428,8 @@ function telaAlerta(id) {
 
     <div class="chartbox">
       <h3>Histórico de preços</h3>
-      ${chart(pts)}
+      ${filtroJanela()}
+      ${chart(pts, { janela: S.view.janela })}
       <button class="btn ghost" style="margin-top:10px" data-go="#/historico/${w.id}">Ver histórico completo</button>
     </div>
   </div>`;
@@ -412,6 +441,8 @@ function telaHistorico(id) {
   const s = stats(w);
   const pts = S.checks[w.id] || [];
   const dias = s ? Math.max(1, Math.round((Date.now() - s.primeiro) / DIA)) : 0;
+  const j = statsJanela(w, S.view.janela);
+  const rot = rotuloJanela(S.view.janela);
   const antecedencia = Math.round((D(w.outbound_date) - Date.now()) / DIA);
 
   const dicas = [
@@ -428,11 +459,12 @@ function telaHistorico(id) {
       <div class="sub muted small">${w.return_date ? 'Ida e volta' : 'Só ida'} · ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''}</div>
       <div class="price-xl" style="font-size:27px">${s ? brl(s.atual, w.currency) : '—'} ${s ? badge(s.pct) : ''}</div>
       <div class="small" style="color:var(--green);font-weight:600">Menor preço: ${s ? brl(s.min, w.currency) : '—'}</div>
-      ${chart(pts, { alto: true })}
+      ${filtroJanela()}
+      ${chart(pts, { alto: true, janela: S.view.janela })}
       <div class="tiles" style="padding:12px 0 0;gap:10px">
-        <div class="tile"><div><b>${s ? brl(s.media, w.currency) : '—'}</b><small>Média 30 dias</small></div></div>
-        <div class="tile"><div><b>${s ? brl(s.max, w.currency) : '—'}</b><small>Máximo 30 dias</small></div></div>
-        <div class="tile"><div><b>${s ? s.leituras : 0}</b><small>Leituras</small></div></div>
+        <div class="tile"><div><b>${j ? brl(j.media, w.currency) : '—'}</b><small>Média · ${rot}</small></div></div>
+        <div class="tile"><div><b>${j ? brl(j.max, w.currency) : '—'}</b><small>Máximo · ${rot}</small></div></div>
+        <div class="tile"><div><b>${j ? j.leituras : 0}</b><small>Leituras · ${rot}</small></div></div>
         <div class="tile"><div><b>${dias}</b><small>Dias monitorando</small></div></div>
       </div>
     </div>
@@ -754,6 +786,9 @@ function toast(msg) {
 document.addEventListener('click', async (e) => {
   const go = e.target.closest('[data-go]');
   if (go) { location.hash = go.dataset.go; return; }
+
+  const jan = e.target.closest('[data-janela]');
+  if (jan) { S.view.janela = jan.dataset.janela === 'tudo' ? 'tudo' : Number(jan.dataset.janela); render(); return; }
 
   const tab = e.target.closest('[data-tab]');
   if (tab) { S.view.tabAlertas = tab.dataset.tab; render(); return; }
