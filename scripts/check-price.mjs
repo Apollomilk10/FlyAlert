@@ -276,6 +276,7 @@ for (const watch of watches) {
   } catch (err) {
     falhas++;
     console.error(`  erro: ${err.message}`);
+    console.error(`::error title=Falha em ${watch.label}::${String(err.message).slice(0, 300)}`);
   }
 }
 
