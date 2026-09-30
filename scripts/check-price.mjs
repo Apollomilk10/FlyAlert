@@ -235,13 +235,82 @@ async function sendPush(watch, reading, veredito) {
   return false;
 }
 
+// ---------- Orçamento de buscas (SerpApi) ----------
+// Cada consulta gasta 1 busca. Para nunca estourar a cota do plano, o script lê o
+// saldo real na SerpApi (chamada gratuita) e reparte o que sobrou pelos dias até a renovação.
+const DIA_MS = 86400_000;
+const RESERVA = Number(process.env.SERPAPI_RESERVA) || 10;          // folga que nunca é gasta
+const DIA_RENOVACAO = Number(process.env.SERPAPI_DIA_RENOVACAO) || 1; // dia do mês em que a cota renova
+const LIMITE_MENSAL = Number(process.env.SERPAPI_LIMITE) || 200;      // só usado se a SerpApi não informar o saldo
+
+async function saldoSerpApi() {
+  try {
+    const res = await fetch(`https://serpapi.com/account.json?api_key=${SERPAPI_KEY}`);
+    const a = await res.json();
+    if (a.error) throw new Error(a.error);
+    const left = Number(a.total_searches_left ?? a.plan_searches_left);
+    if (!Number.isFinite(left)) throw new Error('resposta sem saldo');
+    return left;
+  } catch (e) {
+    console.log(`Não consegui ler o saldo da SerpApi (${e.message}); usando a contagem local.`);
+    return null;
+  }
+}
+
+async function selecionarHoje(todas) {
+  const hoje = new Date();
+  const hojeISO = hoje.toISOString().slice(0, 10);
+  let ativos = todas.filter((w) => w.outbound_date >= hojeISO);
+  if (ativos.length < todas.length) {
+    console.log(`${todas.length - ativos.length} rota(s) com data já passada foram ignoradas.`);
+  }
+  if (!ativos.length) {
+    console.log('Nenhuma rota com data futura.');
+    process.exit(0);
+  }
+
+  let saldo = await saldoSerpApi();
+  if (saldo == null) {
+    const desde = new Date(Date.now() - 30 * DIA_MS).toISOString();
+    const usadas = await sb(`price_checks?source=eq.live&checked_at=gte.${desde}&select=id&limit=1000`);
+    saldo = LIMITE_MENSAL - usadas.length;
+  }
+
+  const y = hoje.getUTCFullYear(), m = hoje.getUTCMonth(), d = hoje.getUTCDate();
+  const hoje0 = Date.UTC(y, m, d);
+  let renova = Date.UTC(y, m, DIA_RENOVACAO);
+  if (renova <= hoje0) renova = Date.UTC(y, m + 1, DIA_RENOVACAO);
+  const diasRestantes = Math.max(1, Math.round((renova - hoje0) / DIA_MS));
+
+  const disponivel = saldo - RESERVA;
+  const cotaHoje = Math.max(0, Math.floor(disponivel / diasRestantes));
+  console.log(`Saldo: ${saldo} buscas | reserva: ${RESERVA} | dias até renovar: ${diasRestantes} | cota de hoje: ${cotaHoje} | rotas ativas: ${ativos.length}`);
+
+  if (cotaHoje <= 0) {
+    console.log(`::warning title=Sem buscas disponíveis::Saldo ${saldo} (reserva ${RESERVA}). Nenhuma consulta feita hoje para não estourar a cota.`);
+    process.exit(0);
+  }
+  if (cotaHoje < ativos.length) {
+    // Prioriza as rotas há mais tempo sem leitura
+    const ultimas = new Map();
+    for (const w of ativos) {
+      const r = await sb(`price_checks?watch_id=eq.${w.id}&select=checked_at&order=checked_at.desc&limit=1`);
+      ultimas.set(w.id, r[0] ? Date.parse(r[0].checked_at) : 0);
+    }
+    ativos = [...ativos].sort((a, b) => ultimas.get(a.id) - ultimas.get(b.id)).slice(0, cotaHoje);
+    console.log(`Cota menor que o número de rotas: consultando só as ${ativos.length} mais antigas hoje.`);
+  }
+  return ativos;
+}
+
 // ---------- Main ----------
 
-const watches = await sb('watches?active=eq.true&select=*');
-if (!watches.length) {
+const todas = await sb('watches?active=eq.true&select=*');
+if (!todas.length) {
   console.log('Nenhuma rota ativa. Adicione uma linha na tabela watches.');
   process.exit(0);
 }
+const watches = await selecionarHoje(todas);
 
 let falhas = 0;
 
