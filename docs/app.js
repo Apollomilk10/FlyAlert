@@ -948,6 +948,16 @@ carregar()
   .catch((err) => { S.erro = err.message; })
   .finally(render);
 
+// PWA instalado fica vivo em segundo plano: recarrega os dados ao voltar para o app
+let ultimaCarga = Date.now();
+function recarregarAoVoltar() {
+  if (document.visibilityState !== 'visible' || Date.now() - ultimaCarga < 60000) return;
+  ultimaCarga = Date.now();
+  carregar().then(render).catch(() => {});
+}
+document.addEventListener('visibilitychange', recarregarAoVoltar);
+window.addEventListener('pageshow', recarregarAoVoltar);
+
 // limpa workers antigos presos de versões anteriores
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations()
