@@ -5,6 +5,8 @@ on:
     # 1x/dia (UTC) = 06h17 em Brasília.
     # 7 alertas x 1 consulta x 30 dias = 210 buscas/mês — cabe nas 250 do free tier.
     - cron: '17 9 * * *'
+  push:
+    paths: ['.run-now']
   workflow_dispatch:        # botão pra rodar na mão
 
 concurrency:
