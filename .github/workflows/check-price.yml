@@ -14,7 +14,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +25,7 @@ jobs:
       - name: Consultar preços e alertar
         env:
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           # Opcionais (Settings > Variables > Actions): dia em que a cota renova, folga e limite de reserva
           SERPAPI_DIA_RENOVACAO: ${{ vars.SERPAPI_DIA_RENOVACAO }}
           SERPAPI_RESERVA: ${{ vars.SERPAPI_RESERVA }}
