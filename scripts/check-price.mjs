@@ -6,6 +6,7 @@
 
 const {
   SERPAPI_KEY,
+  APIFY_TOKEN,
   SUPABASE_URL,
   SUPABASE_SERVICE_KEY,
   ONESIGNAL_APP_ID,
@@ -21,7 +22,11 @@ const MAX_OFERTAS = 5;       // quantas opções guardar para comparação
 const QUEDA_MINIMA = 50;     // em R$ — ignora queda insignificante
 const AVISAR_SEMPRE = true;  // true = push a cada consulta, mesmo sem queda
 
-for (const [k, v] of Object.entries({ SERPAPI_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
+if (!SERPAPI_KEY && !APIFY_TOKEN) {
+  console.error('Falta uma fonte de preços: configure SERPAPI_KEY e/ou APIFY_TOKEN em Settings > Secrets.');
+  process.exit(1);
+}
+for (const [k, v] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
   if (!v) {
     console.error(`Falta a variável ${k}. Configure em Settings > Secrets do repositório.`);
     process.exit(1);
@@ -47,7 +52,7 @@ async function sb(path, options = {}) {
 
 // ---------- SerpApi / Google Flights ----------
 
-async function fetchPrice(watch) {
+async function fetchPriceSerp(watch) {
   const params = new URLSearchParams({
     engine: 'google_flights',
     departure_id: watch.departure_id,
@@ -235,6 +240,103 @@ async function sendPush(watch, reading, veredito) {
   return false;
 }
 
+// ---------- Apify (reserva grátis: Google Flights com proxy residencial) ----------
+// Usado quando a SerpApi está sem cota ou falha. O plano grátis do Apify dá US$ 5/mês;
+// cada rota custa ~US$ 0,01 (40 itinerários x US$ 0,20 por 1.000).
+const APIFY_ACTOR = 'lergassy~google-flights-scraper';
+const APIFY_MAX_RESULTS = 40;
+
+function horaApify(h, fim = false) {
+  const n = Math.min(Math.max(Number(h), 0), 23);
+  return `${String(n).padStart(2, '0')}:${fim ? '59' : '00'}`;
+}
+
+async function fetchPriceApify(watch) {
+  const input = {
+    origin: watch.departure_id,
+    destination: watch.arrival_id,
+    departureDate: watch.outbound_date,
+    currency: watch.currency,
+    market: 'BR',
+    sortBy: 'price',
+    maxResults: APIFY_MAX_RESULTS,
+    includePriceInsights: true,
+  };
+  if (watch.trip_type === 1 && watch.return_date) input.returnDate = watch.return_date;
+  if (watch.adults && watch.adults > 1) input.adults = watch.adults;
+  if (watch.outbound_times) {
+    const t = String(watch.outbound_times).split(',').map(Number);
+    if (t.length >= 2 && t.slice(0, 2).every(Number.isFinite)) {
+      input.departureTimeFrom = horaApify(t[0]);
+      input.departureTimeTo = horaApify(t[1], true);
+    }
+    if (t.length >= 4 && t.slice(2, 4).every(Number.isFinite)) {
+      input.arrivalTimeFrom = horaApify(t[2]);
+      input.arrivalTimeTo = horaApify(t[3], true);
+    }
+  }
+
+  const res = await fetch(`https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?timeout=150`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${APIFY_TOKEN}` },
+    body: JSON.stringify(input),
+    signal: AbortSignal.timeout(170_000),
+  });
+  if (!res.ok) throw new Error(`Apify: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+  const items = await res.json();
+  if (!Array.isArray(items)) throw new Error('Apify: resposta inesperada');
+
+  const voos = items.filter((i) => i.type === 'flight' && Number.isFinite(Number(i.price)));
+  if (!voos.length) {
+    const erro = items.find((i) => i.type === 'error');
+    if (erro) throw new Error(`Apify: ${erro.error ?? erro.reason ?? erro.message ?? 'erro na busca'}`);
+    return null;
+  }
+
+  const resumo = (o) => ({
+    price: Number(o.price),
+    airlines: o.legs?.length ? [...new Set(o.legs.map((l) => l.airline).filter(Boolean))] : (o.airline ? [o.airline] : []),
+    duration_min: o.totalDurationMinutes ?? null,
+    stops: o.stops ?? 0,
+    departure: o.departAt ?? null,
+    departure_id: o.departAirport ?? null,
+    arrival: o.arriveAt ?? null,
+  });
+
+  const cheapest = voos.reduce((a, b) => (Number(b.price) < Number(a.price) ? b : a));
+  const melhores = [...voos].sort((a, b) => Number(a.price) - Number(b.price)).slice(0, MAX_OFERTAS).map(resumo);
+  const typicalLow = cheapest.typicalPriceLow ?? null;
+  const typicalHigh = cheapest.typicalPriceHigh ?? null;
+
+  return {
+    price: Number(cheapest.price),
+    currency: watch.currency,
+    price_level: cheapest.priceLevel ?? null,
+    typical_low: typicalLow,
+    typical_high: typicalHigh,
+    airline: cheapest.airline ?? null,
+    duration_min: cheapest.totalDurationMinutes ?? null,
+    booking_url: cheapest.googleFlightsUrl ?? null,
+    offers: melhores,
+    raw: {
+      fonte: 'apify',
+      insights: { price_level: cheapest.priceLevel ?? null, typical_price_range: [typicalLow, typicalHigh] },
+      flights: cheapest.legs ?? [],
+    },
+  };
+}
+
+async function buscarPreco(watch, fonte) {
+  if (fonte === 'apify') return fetchPriceApify(watch);
+  try {
+    return await fetchPriceSerp(watch);
+  } catch (e) {
+    if (!APIFY_TOKEN) throw e;
+    console.log(`  SerpApi falhou (${e.message}); tentando o Apify.`);
+    return fetchPriceApify(watch);
+  }
+}
+
 // ---------- Orçamento de buscas (SerpApi) ----------
 // Cada consulta gasta 1 busca. Para nunca estourar a cota do plano, o script lê o
 // saldo real na SerpApi (chamada gratuita) e reparte o que sobrou pelos dias até a renovação.
@@ -269,6 +371,11 @@ async function selecionarHoje(todas) {
     process.exit(0);
   }
 
+  if (!SERPAPI_KEY) {
+    console.log('Sem SERPAPI_KEY: usando só o Apify.');
+    return ativos.map((w) => ({ watch: w, fonte: 'apify' }));
+  }
+
   let saldo = await saldoSerpApi();
   if (saldo == null) {
     const desde = new Date(Date.now() - 30 * DIA_MS).toISOString();
@@ -287,6 +394,10 @@ async function selecionarHoje(todas) {
   console.log(`Saldo: ${saldo} buscas | reserva: ${RESERVA} | dias até renovar: ${diasRestantes} | cota de hoje: ${cotaHoje} | rotas ativas: ${ativos.length}`);
 
   if (cotaHoje <= 0) {
+    if (APIFY_TOKEN) {
+      console.log(`SerpApi sem cota hoje (saldo ${saldo}): usando o Apify.`);
+      return ativos.map((w) => ({ watch: w, fonte: 'apify' }));
+    }
     console.log(`::warning title=Sem buscas disponíveis::Saldo ${saldo} (reserva ${RESERVA}). Nenhuma consulta feita hoje para não estourar a cota.`);
     process.exit(0);
   }
@@ -297,10 +408,13 @@ async function selecionarHoje(todas) {
       const r = await sb(`price_checks?watch_id=eq.${w.id}&select=checked_at&order=checked_at.desc&limit=1`);
       ultimas.set(w.id, r[0] ? Date.parse(r[0].checked_at) : 0);
     }
-    ativos = [...ativos].sort((a, b) => ultimas.get(a.id) - ultimas.get(b.id)).slice(0, cotaHoje);
-    console.log(`Cota menor que o número de rotas: consultando só as ${ativos.length} mais antigas hoje.`);
+    const ordenadas = [...ativos].sort((a, b) => ultimas.get(a.id) - ultimas.get(b.id));
+    let plano = ordenadas.map((w, i) => ({ watch: w, fonte: i < cotaHoje ? 'serpapi' : 'apify' }));
+    if (!APIFY_TOKEN) plano = plano.filter((p) => p.fonte === 'serpapi');
+    console.log(`Cota menor que o número de rotas: ${cotaHoje} na SerpApi e ${plano.length - Math.min(cotaHoje, plano.length)} no Apify hoje.`);
+    return plano;
   }
-  return ativos;
+  return ativos.map((w) => ({ watch: w, fonte: 'serpapi' }));
 }
 
 // ---------- Main ----------
@@ -310,14 +424,14 @@ if (!todas.length) {
   console.log('Nenhuma rota ativa. Adicione uma linha na tabela watches.');
   process.exit(0);
 }
-const watches = await selecionarHoje(todas);
+const plano = await selecionarHoje(todas);
 
 let falhas = 0;
 
-for (const watch of watches) {
-  console.log(`\n${watch.label} (${watch.departure_id}->${watch.arrival_id} ${watch.outbound_date})`);
+for (const { watch, fonte } of plano) {
+  console.log(`\n${watch.label} (${watch.departure_id}->${watch.arrival_id} ${watch.outbound_date}) [${fonte}]`);
   try {
-    const reading = await fetchPrice(watch);
+    const reading = await buscarPreco(watch, fonte);
     if (!reading) {
       console.log('  sem ofertas retornadas');
       continue;
@@ -349,4 +463,4 @@ for (const watch of watches) {
   }
 }
 
-process.exit(falhas === watches.length ? 1 : 0);
+process.exit(falhas === plano.length ? 1 : 0);
