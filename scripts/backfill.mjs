@@ -80,7 +80,7 @@ async function historico(watch, aeroporto) {
   return pontos;
 }
 
-const watches = await sb('watches?active=eq.true&select=*');
+const watches = await sb('watches?active=eq.true&trip_type=eq.2&select=*');
 
 for (const watch of watches) {
   console.log(`\n${watch.label}`);

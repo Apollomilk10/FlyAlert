@@ -419,9 +419,9 @@ async function selecionarHoje(todas) {
 
 // ---------- Main ----------
 
-const todas = await sb('watches?active=eq.true&select=*');
+const todas = await sb('watches?active=eq.true&trip_type=eq.2&select=*');
 if (!todas.length) {
-  console.log('Nenhuma rota ativa. Adicione uma linha na tabela watches.');
+  console.log('Nenhuma rota de só ida ativa. Adicione uma linha na tabela watches (trip_type = 2).');
   process.exit(0);
 }
 const plano = await selecionarHoje(todas);

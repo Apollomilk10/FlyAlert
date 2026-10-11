@@ -126,7 +126,9 @@ async function api(path, options = {}) {
 }
 
 async function carregar() {
-  const watches = await api('watches?select=*&order=outbound_date.asc');
+  // Só trajetos de sentido único: alertas antigos de ida e volta não aparecem mais.
+  const watches = (await api('watches?select=*&order=outbound_date.asc'))
+    .filter((w) => w.trip_type === 2 && !w.return_date);
   const ids = watches.map((w) => `"${w.id}"`).join(',');
   const [checks, alertas] = await Promise.all([
     ids ? api(`price_checks?watch_id=in.(${ids})&select=watch_id,price,currency,price_level,typical_low,typical_high,airline,duration_min,offers,source,checked_at&order=checked_at.asc&limit=4000`) : [],
@@ -314,7 +316,7 @@ function linhaAlerta(w, { toggle = false } = {}) {
     <button class="info" data-go="#/alerta/${w.id}">
       <b>${esc(rota(w))}</b>
       <small class="datas">${periodo(w)}</small>
-      <small>${pax} · ${w.return_date ? 'ida e volta' : 'só ida'}</small>
+      <small>${pax} · só ida</small>
       <span class="price">${preco} ${dist}</span>
     </button>
     ${controle}
@@ -413,8 +415,8 @@ function telaAlerta(id) {
 
   <div class="detail-head">
     <h2>${esc(rota(w))}</h2>
-    <div class="sub">${w.return_date ? 'Ida e volta' : 'Só ida'} · ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''}</div>
-    <div class="sub" style="margin-top:8px">${ic('cal2', 15)} ${dataLonga(w.outbound_date)}${w.return_date ? ` — ${dataLonga(w.return_date)}` : ''}</div>
+    <div class="sub">Só ida · ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''}</div>
+    <div class="sub" style="margin-top:8px">${ic('cal2', 15)} ${dataLonga(w.outbound_date)}</div>
 
     <div class="price-xl">${s ? brl(s.atual, w.currency) : '—'} ${s ? badge(s.pct) : ''}</div>
     <div class="sub">Menor preço encontrado: <b>${s ? brl(s.min, w.currency) : '—'}</b>${u?.airline ? ` · ${esc(u.airline)}` : ''}</div>
@@ -456,7 +458,7 @@ function telaHistorico(id) {
   <div class="wrap">
     <div class="card">
       <b style="font-size:16px">${esc(rota(w))}</b>
-      <div class="sub muted small">${w.return_date ? 'Ida e volta' : 'Só ida'} · ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''}</div>
+      <div class="sub muted small">Só ida · ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''}</div>
       <div class="price-xl" style="font-size:27px">${s ? brl(s.atual, w.currency) : '—'} ${s ? badge(s.pct) : ''}</div>
       <div class="small" style="color:var(--green);font-weight:600">Menor preço: ${s ? brl(s.min, w.currency) : '—'}</div>
       ${filtroJanela()}
@@ -503,17 +505,8 @@ function telaNovo() {
     <div class="field"><label>Destino</label>
       <div class="control"><span class="ic">${ic('pin', 18)}</span>${sel('f-destino', 'SSA')}<span class="chev">${ic('right', 16)}</span></div></div>
 
-    <div class="field"><label>Tipo de viagem</label>
-      <div class="tabs light" style="margin:0">
-        <button class="on" data-tipo="1" id="tipo-1">Ida e volta</button>
-        <button data-tipo="2" id="tipo-2">Só ida</button>
-      </div></div>
-
-    <div class="field"><label>Data de ida</label>
+    <div class="field"><label>Data do voo (só ida)</label>
       <div class="control"><span class="ic">${ic('calendar', 18)}</span><input type="date" id="f-ida" value="2026-12-26"></div></div>
-
-    <div class="field" id="campo-volta"><label>Data de volta</label>
-      <div class="control"><span class="ic">${ic('calendar', 18)}</span><input type="date" id="f-volta" value="2027-01-01"></div></div>
 
     <div class="field"><label>Passageiros</label>
       <div class="control"><span class="ic">${ic('users', 18)}</span>
@@ -635,10 +628,68 @@ function ofertasFiltradas(u) {
   return of;
 }
 
+const abasViagens = (ativa) => `<div class="tabs light" style="margin-bottom:14px">
+  <button class="${ativa === 'viagens' ? 'on' : ''}" data-go="#/viagens">Viagens</button>
+  <button class="${ativa === 'info' ? 'on' : ''}" data-go="#/info">Informações</button>
+</div>`;
+
+// Horários de cada trajeto, lidos da última consulta salva (não gasta requisição).
+function telaInfo() {
+  const lista = S.watches.filter((w) => w.active);
+  const quando = (c) => c
+    ? new Date(c).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ' às')
+    : null;
+
+  const bloco = (w) => {
+    const u = S.ultima[w.id];
+    const ofertas = (Array.isArray(u?.offers) ? [...u.offers] : [])
+      .filter((o) => o.departure)
+      .sort((a, b) => String(a.departure).localeCompare(String(b.departure)));
+    const barato = ofertas.length ? ofertas.reduce((a, b) => (b.price < a.price ? b : a)) : null;
+    const faixa = w.outbound_times ? `partida ${w.outbound_times.replace(',', 'h–')}h` : 'qualquer horário';
+
+    const linhas = ofertas.map((o) => `
+      <div class="row" style="padding:10px 0">
+        <div class="info">
+          <b>${hhmm(o.departure) || '--:--'} → ${hhmm(o.arrival) || '--:--'}${o === barato ? ' <span class="badge">mais barato</span>' : ''}</b>
+          <small>${esc(o.departure_id || sigla(w.departure_id))} → ${esc(sigla(w.arrival_id))} · ${o.stops === 0 ? 'Direto' : `${o.stops} escala${o.stops > 1 ? 's' : ''}`} · ${durStr(o.duration_min)}</small>
+          <small>${esc((o.airlines || []).join(' + ') || '—')}</small>
+        </div>
+        <b style="font-size:14.5px">${brl(o.price, w.currency)}</b>
+      </div>`).join('');
+
+    return `<div class="card">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="thumb" style="background:${grad(w)};flex:none">${sigla(w.departure_id)}→${sigla(w.arrival_id)}</span>
+        <div style="flex:1;min-width:0">
+          <b style="font-size:15.5px">${esc(rota(w))}</b>
+          <div class="muted small">${dataLonga(w.outbound_date)} · ${faixa}</div>
+        </div>
+      </div>
+      ${ofertas.length
+        ? `<div style="margin-top:8px">${linhas}</div>
+           <div class="muted small" style="margin-top:8px">Atualizado em ${quando(u.checked_at)} · ${ofertas.length} horário${ofertas.length > 1 ? 's' : ''}</div>`
+        : `<div class="muted small" style="margin-top:12px">Ainda sem horários salvos para este trajeto. Eles aparecem após a próxima consulta.</div>`}
+      <button class="btn ghost" style="margin-top:12px" data-go="#/viagem/${w.id}">Ver detalhes</button>
+    </div>`;
+  };
+
+  return `${topbar('Minhas viagens')}
+  <div class="wrap">
+    ${abasViagens('info')}
+    ${lista.length ? lista.map(bloco).join('')
+      : `<div class="empty" style="margin:0">Nenhum trajeto ativo. Toque no + para criar um alerta.</div>`}
+    <div class="tipcard">
+      <span class="ic">${ic('info', 20)}</span>
+      <p>Os horários vêm da última consulta de cada trajeto (3x por dia) e mostram as opções mais baratas encontradas, não todos os voos do dia.</p>
+    </div>
+  </div>`;
+}
+
 function telaViagem(id) {
   if (!id) {
     return `${topbar('Minhas viagens')}
-    <div class="wrap">${S.watches.length
+    <div class="wrap">${abasViagens('viagens')}${S.watches.length
       ? `<div class="rows">${S.watches.map((w) => linhaAlerta(w)).join('')}</div>`
       : `<div class="empty" style="margin:0">Nenhuma viagem monitorada.</div>`}</div>`;
   }
@@ -671,7 +722,7 @@ function telaViagem(id) {
     </div>
     <div style="margin-top:12px">
       <b style="font-size:17px">${esc(cidade(w.arrival_id))}</b>
-      <div class="muted small">${dataLonga(w.outbound_date)}${w.return_date ? ` – ${dataLonga(w.return_date)}` : ''}</div>
+      <div class="muted small">${dataLonga(w.outbound_date)}</div>
       <div class="muted small">${ic('users', 14)} ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''} · ${w.outbound_times ? `partida ${w.outbound_times.replace(',', 'h–')}h` : 'qualquer horário'}</div>
     </div>
 
@@ -714,12 +765,12 @@ function telaPerfil() {
     ${itens.map(([i, t, go]) => `<button data-go="${go}"><span class="ic">${ic(i, 20)}</span><span style="flex:1">${t}</span><span class="chev">${ic('right', 18)}</span></button>`).join('')}
     <button class="danger" data-go="#/"><span class="ic">${ic('logout', 20)}</span><span style="flex:1">Sair</span></button>
   </div>
-  <p class="hint" style="text-align:center;margin-top:16px">Fly Alert · dados via Google Flights (SerpApi) · build 13</p>`;
+  <p class="hint" style="text-align:center;margin-top:16px">Fly Alert · dados via Google Flights (SerpApi) · build 14</p>`;
 }
 
 /* ---------------- navegação ---------------- */
 
-const TELAS = ['splash', 'home', 'alertas', 'alerta', 'historico', 'novo', 'filtros', 'notificacoes', 'viagem', 'perfil'];
+const TELAS = ['splash', 'home', 'alertas', 'alerta', 'historico', 'novo', 'filtros', 'notificacoes', 'viagem', 'info', 'perfil'];
 
 function navbar(atual) {
   const itens = [
@@ -740,7 +791,7 @@ function render() {
   const mapa = {
     '': 'splash', home: 'home', alertas: 'alertas', alerta: 'alerta', historico: 'historico',
     novo: 'novo', filtros: 'filtros', notificacoes: 'notificacoes',
-    viagem: 'viagem', viagens: 'viagem', perfil: 'perfil',
+    viagem: 'viagem', viagens: 'viagem', info: 'info', perfil: 'perfil',
   };
   const tela = mapa[seg] ?? 'home';
 
@@ -754,7 +805,7 @@ function render() {
   } else {
     const html = {
       splash: telaSplash, home: telaHome, alertas: telaAlertas, novo: telaNovo,
-      filtros: telaFiltros, notificacoes: telaNotificacoes, perfil: telaPerfil,
+      filtros: telaFiltros, notificacoes: telaNotificacoes, perfil: telaPerfil, info: telaInfo,
       alerta: () => telaAlerta(id), historico: () => telaHistorico(id),
       viagem: () => telaViagem(seg === 'viagem' ? id : null),
     }[tela];
@@ -765,7 +816,7 @@ function render() {
   nav.hidden = tela === 'splash';
   if (!nav.hidden) {
     const aba = ['#/home', '#/alertas', '#/novo', '#/viagens', '#/perfil'];
-    const atual = aba.find((a) => hash.startsWith(a)) || (tela === 'viagem' ? '#/viagens' : tela === 'alerta' || tela === 'historico' ? '#/alertas' : '');
+    const atual = aba.find((a) => hash.startsWith(a)) || (tela === 'viagem' || tela === 'info' ? '#/viagens' : tela === 'alerta' || tela === 'historico' ? '#/alertas' : '');
     nav.innerHTML = navbar(atual);
   }
   window.scrollTo(0, 0);
@@ -830,13 +881,6 @@ document.addEventListener('click', async (e) => {
     return;
   }
 
-  const tipo = e.target.closest('[data-tipo]');
-  if (tipo) {
-    $('tipo-1').classList.toggle('on', tipo.dataset.tipo === '1');
-    $('tipo-2').classList.toggle('on', tipo.dataset.tipo === '2');
-    $('campo-volta').style.display = tipo.dataset.tipo === '1' ? '' : 'none';
-    return;
-  }
 });
 
 function prepararFormulario() {
@@ -861,15 +905,13 @@ async function alternarAlerta(id) {
 
 async function criarAlerta() {
   const btn = $('btn-criar');
-  const tipo = $('tipo-1').classList.contains('on') ? 1 : 2;
   const dep = $('f-origem').value, arr = $('f-destino').value;
-  const ida = $('f-ida').value, volta = $('f-volta').value;
+  const ida = $('f-ida').value;
   const adults = Number($('f-pax-txt').dataset.n || 1);
   const teto = Number($('f-teto').value) || null;
   const janela = $('f-janela').value || null;
 
-  if (!ida) return toast('Escolha a data de ida.');
-  if (tipo === 1 && !volta) return toast('Escolha a data de volta.');
+  if (!ida) return toast('Escolha a data do voo.');
   if (dep === arr) return toast('Origem e destino precisam ser diferentes.');
 
   btn.disabled = true; btn.textContent = 'Criando...';
@@ -879,8 +921,8 @@ async function criarAlerta() {
       body: JSON.stringify({
         label: `${cidade(dep)} → ${cidade(arr)} · ${diaMes(ida)}`,
         departure_id: dep, arrival_id: arr,
-        outbound_date: ida, return_date: tipo === 1 ? volta : null,
-        trip_type: tipo, currency: 'BRL', target_price: teto,
+        outbound_date: ida, return_date: null,
+        trip_type: 2, currency: 'BRL', target_price: teto,
         outbound_times: janela, adults, active: true,
       }),
     });

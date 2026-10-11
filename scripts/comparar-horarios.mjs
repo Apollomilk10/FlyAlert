@@ -76,7 +76,7 @@ async function buscar(watch, comFiltro) {
   };
 }
 
-const watches = await sb('watches?active=eq.true&select=*');
+const watches = await sb('watches?active=eq.true&trip_type=eq.2&select=*');
 
 for (const w of watches) {
   console.log(`\n=== ${w.label} ===`);
