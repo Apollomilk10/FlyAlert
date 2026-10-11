@@ -5,8 +5,8 @@ Montei isso pra ele me avisar sozinho.
 
 O FlyAlert consulta as rotas de tempos em tempos, guarda o histórico de preço
 e manda um push no meu celular quando a tarifa fica mais barata do que qualquer
-valor visto nos últimos 30 dias. O app é um PWA de 10 telas onde dá pra criar,
-pausar e acompanhar cada rota.
+valor visto nos últimos 30 dias. O app é um PWA de 5 telas, só trajetos de ida, que responde uma pergunta: o preço
+de agora está barato ou caro em relação ao histórico?
 
 **Custo mensal: R$ 0.** Roda inteiro em free tier — sem servidor, sem cartão.
 
@@ -158,21 +158,22 @@ por hash, sem build step e sem framework.
 
 | Tela | Rota | O que faz |
 |---|---|---|
-| Splash | `#/` | Abertura; some depois do primeiro toque |
-| Início | `#/home` | Economia dos últimos 30 dias, contadores e prévia dos alertas |
-| Meus alertas | `#/alertas` | Ativos e inativos, com o toggle que pausa a rota no banco |
-| Detalhe | `#/alerta/:id` | Preço atual, variação, menor já visto e gráfico |
-| Histórico | `#/historico/:id` | Gráfico ampliado, média/máximo/leituras e dicas de compra |
-| Novo alerta | `#/novo` | Origem, destino, datas, passageiros, teto e janela de partida |
-| Filtros | `#/filtros` | Escalas, horário de partida e companhias (aplicados às ofertas) |
-| Notificações | `#/notificacoes` | Liga/desliga o push e lista os avisos já enviados |
-| Minha viagem | `#/viagem/:id` | As 5 ofertas da última consulta, com horários e conexões |
-| Perfil | `#/perfil` | Atalhos para o resto do app |
+| Painel | `#/home` | Um card por trajeto com o veredito (barato, na média, caro) e a faixa mín–média–máx do histórico |
+| Detalhe | `#/alerta/:id` | Veredito, comparação com o histórico, gráfico, horários da última consulta e links do Google Flights e Skyscanner |
+| Meus alertas | `#/alertas` | Ativos e pausados, com o toggle que pausa a rota no banco |
+| Novo alerta | `#/novo` | Origem, destino, data (só ida), janela de partida, passageiros e teto |
+| Ajustes | `#/ajustes` | Notificações push, última/próxima atualização e uso da cota de buscas |
 
-O número em destaque na home é a diferença entre o preço de hoje e a média de 30
-dias de cada rota, somada. A comparação **por oferta** — preço, companhia,
-duração, paradas e horário — está na tela da viagem: às vezes R$ 150 a mais
-cortam três horas de conexão.
+**Veredito.** Compara o preço atual com todas as leituras guardadas (inclusive o
+histórico importado do Google): *barato* se ele é menor que 75% ou mais delas,
+*caro* se é menor que só 25% ou menos, *na média* no meio. Com menos de 8 leituras
+o veredito aparece como provisório ("poucos dados").
+
+**Economia de buscas.** O robô roda todo dia às 06h17 (Brasília), mas consulta cada
+trajeto só conforme a proximidade da viagem: mais de 90 dias → a cada 3 dias; de 30
+a 90 → a cada 2; menos de 30 → todo dia. O app lê o histórico sem o JSON de ofertas
+e só recarrega ao voltar depois de 30 minutos. O botão manual do workflow tem a opção
+*forcar* para consultar tudo na hora.
 
 O visual segue o Figma do app: azul de aviação sobre fundo claro, cartões
 arredondados e gráfico de área.

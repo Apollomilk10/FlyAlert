@@ -244,3 +244,25 @@ svg.chart{width:100%;height:auto;display:block;overflow:visible}
   width:48px;height:48px;border-radius:50%;background:var(--blue);color:#fff;
   display:grid;place-items:center;margin:0 auto -6px;box-shadow:0 6px 16px rgba(29,111,232,.4);
 }
+
+/* ---- painel: veredito barato/caro vs. histórico ---- */
+.resumo{background:linear-gradient(135deg,#0B2447,#1B4D87);color:#fff;margin-bottom:14px}
+.resumo.bom{background:linear-gradient(135deg,#0E5B3A,#15A05A)}
+.resumo h2{margin:0;font-size:19px;line-height:1.25}
+.resumo p{margin:6px 0 8px;font-size:13.5px;opacity:.92}
+.resumo small{font-size:11.5px;opacity:.8}
+.vcard{display:block;width:100%;text-align:left;background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;margin-bottom:12px}
+.vtop{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.vtop b{font-size:15.5px}
+.vprice{font-size:26px;font-weight:800;margin:10px 0 12px;letter-spacing:-.5px}
+.vprice.big{font-size:32px}
+.vd{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap}
+.vd.barato{background:var(--green-bg);color:var(--green)}
+.vd.media{background:#FFF3E0;color:var(--amber)}
+.vd.caro{background:#FDECEC;color:var(--red)}
+.vd.poucos{background:#EEF2F7;color:var(--muted)}
+.faixa{position:relative;height:6px;border-radius:3px;background:linear-gradient(90deg,#15A05A,#F5B301,#E5484D);margin:4px 7px 0}
+.faixa i{position:absolute;top:-5px;width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid var(--text);transform:translateX(-50%);box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.vlab{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:9px;font-weight:600}
+.vtxt{font-size:13px;color:var(--text);margin-top:10px;line-height:1.4}
+.frases{margin:12px 0 0;padding-left:18px;font-size:13.5px;line-height:1.55}

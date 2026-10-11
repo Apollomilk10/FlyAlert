@@ -359,6 +359,21 @@ async function saldoSerpApi() {
   }
 }
 
+// Economia de buscas: quanto mais longe a viagem, menos vezes a rota é consultada.
+// Mais de 90 dias -> a cada 3 dias | 30 a 90 -> a cada 2 | menos de 30 -> todo dia.
+// FORCAR=true (botão manual do workflow) ignora o intervalo.
+const FORCAR = process.env.FORCAR === 'true';
+const intervaloDias = (dias) => (dias > 90 ? 3 : dias > 30 ? 2 : 1);
+
+async function deveConsultarHoje(w, agora) {
+  const intervalo = intervaloDias(Math.round((Date.parse(w.outbound_date) - agora) / DIA_MS));
+  if (intervalo === 1) return true;
+  const r = await sb(`price_checks?watch_id=eq.${w.id}&source=neq.google_history&select=checked_at&order=checked_at.desc&limit=1`);
+  if (!r[0]) return true;
+  const idadeHoras = (agora - Date.parse(r[0].checked_at)) / 3600_000;
+  return idadeHoras >= intervalo * 24 - 3; // 3h de folga: o cron nunca roda exatamente no mesmo minuto
+}
+
 async function selecionarHoje(todas) {
   const hoje = new Date();
   const hojeISO = hoje.toISOString().slice(0, 10);
@@ -369,6 +384,17 @@ async function selecionarHoje(todas) {
   if (!ativos.length) {
     console.log('Nenhuma rota com data futura.');
     process.exit(0);
+  }
+
+  if (!FORCAR) {
+    const prontos = [];
+    for (const w of ativos) if (await deveConsultarHoje(w, hoje.getTime())) prontos.push(w);
+    console.log(`Intervalo por proximidade da viagem: ${prontos.length} de ${ativos.length} rota(s) precisam de leitura hoje.`);
+    ativos = prontos;
+    if (!ativos.length) {
+      console.log('Nenhuma rota precisa de leitura hoje. Nenhuma busca gasta.');
+      process.exit(0);
+    }
   }
 
   if (!SERPAPI_KEY) {
