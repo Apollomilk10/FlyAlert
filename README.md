@@ -23,7 +23,7 @@ Actions que acorda, faz seu trabalho em 10 segundos e morre.
 
 ```mermaid
 flowchart LR
-    subgraph agendador["GitHub Actions · cron 3x/dia"]
+    subgraph agendador["GitHub Actions · cron 1x/dia"]
         script["check-price.mjs"]
     end
 
@@ -267,8 +267,7 @@ vai na frente: `R$ 1.700 · São Paulo → Salvador`, não o contrário.
 **Cron pausado.** Workflow agendado em repo público é desativado após 60 dias sem
 commits. Qualquer commit reativa.
 
-**Fuso.** O cron do Actions é UTC. `17 1,9,17 * * *` = 22h, 06h e 14h em
-Brasília.
+**Fuso.** O cron do Actions é UTC. `17 9 * * *` = 06h17 em Brasília (1x por dia).
 
 ---
 

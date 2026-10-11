@@ -46,6 +46,44 @@ const periodo = (w) => w.return_date
   : `${diaMes(w.outbound_date)} ${D(w.outbound_date).getFullYear()}`;
 const sigla = (ids) => String(ids).split(',')[0].trim();
 
+// Skyscanner (só ida). Vários aeroportos da mesma cidade viram o código da cidade.
+const skyId = (ids) => {
+  const l = String(ids).split(',').map((s) => s.trim().toUpperCase());
+  if (l.length > 1 && l.every((c) => ['GRU', 'CGH', 'VCP'].includes(c))) return 'sao';
+  if (l.length > 1 && l.every((c) => ['GIG', 'SDU'].includes(c))) return 'rio';
+  return l[0].toLowerCase();
+};
+const linkSkyscanner = (w) => {
+  const [a, m, d] = w.outbound_date.split('-');
+  return `https://www.skyscanner.com.br/transporte/passagens-aereas/${skyId(w.departure_id)}/${skyId(w.arrival_id)}/${a.slice(2)}${m}${d}/?adultsv2=${w.adults || 1}&cabinclass=economy&rtn=0`;
+};
+const faixaTxt = (w) => (w.outbound_times ? `partida ${w.outbound_times.replace(',', 'h–')}h` : 'qualquer horário');
+
+/* Atualização dos dados: o robô roda 1x por dia (.github/workflows/check-price.yml → cron 17 9 * * * UTC = 06h17 em Brasília). */
+const ATUALIZA_UTC = [9, 17];
+const BUSCAS_MES = 250, RESERVA_BUSCAS = 10; // plano gratuito da SerpApi
+const fmtQuando = (d) => new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ' às');
+function proximaAtualizacao() {
+  const n = new Date();
+  let t = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate(), ATUALIZA_UTC[0], ATUALIZA_UTC[1]);
+  if (t <= n.getTime()) t += 86400000;
+  return t;
+}
+function cardAtualizacao() {
+  const ativos = S.watches.filter((w) => w.active);
+  const ultima = ativos.map((w) => S.ultima[w.id]?.checked_at).filter(Boolean).sort().pop();
+  const usoMes = ativos.length * 30;
+  const maxAlertas = Math.floor((BUSCAS_MES - RESERVA_BUSCAS) / 30);
+  return `<div class="card" style="margin-bottom:14px">
+    <b style="font-size:15px">Atualização dos dados</b>
+    <div class="row" style="padding:9px 0"><span class="info"><b>Última atualização</b></span><span>${ultima ? fmtQuando(ultima) : '—'}</span></div>
+    <div class="row" style="padding:9px 0"><span class="info"><b>Próxima (aprox.)</b></span><span>${fmtQuando(proximaAtualizacao())}</span></div>
+    <div class="row" style="padding:9px 0"><span class="info"><b>Frequência</b></span><span>1x por dia · ~06h17</span></div>
+    <div class="row" style="padding:9px 0"><span class="info"><b>Buscas por mês</b></span><span>${usoMes} de ${BUSCAS_MES}</span></div>
+    <div class="muted small" style="margin-top:6px">Cada alerta gasta 1 busca por dia. Com a cota gratuita cabem até ${maxAlertas} alertas atualizando 1x por dia.</div>
+  </div>`;
+}
+
 const GRADS = [
   ['#1D6FE8', '#0B2447'], ['#2E9AD6', '#12467B'], ['#3AA680', '#0E3B57'],
   ['#C97A05', '#7A3B12'], ['#7A5AD6', '#1B2A6B'], ['#D65A7A', '#5B1B45'],
@@ -316,7 +354,7 @@ function linhaAlerta(w, { toggle = false } = {}) {
     <button class="info" data-go="#/alerta/${w.id}">
       <b>${esc(rota(w))}</b>
       <small class="datas">${periodo(w)}</small>
-      <small>${pax} · só ida</small>
+      <small>${pax} · só ida · ${faixaTxt(w)}</small>
       <span class="price">${preco} ${dist}</span>
     </button>
     ${controle}
@@ -449,7 +487,7 @@ function telaHistorico(id) {
 
   const dicas = [
     [ic('clock', 18), `Faltam <b>${antecedencia} dias</b> para a viagem. A faixa mais barata costuma aparecer entre 60 e 90 dias antes.`],
-    [ic('cal2', 18), `Terça e quarta são os dias com os preços mais baixos — o robô consulta 3x por dia (06h, 14h e 22h).`],
+    [ic('cal2', 18), `Terça e quarta são os dias com os preços mais baixos — o robô consulta 1x por dia (por volta das 06h17).`],
     [ic('plane', 18), `Voos diretos podem sair mais caros, mas economizam tempo. Compare na aba da viagem.`],
   ];
 
@@ -530,7 +568,7 @@ function telaNovo() {
         </select></div></div>
 
     <button class="btn" id="btn-criar" style="margin:20px 0 8px">Criar alerta</button>
-    <p class="hint" style="text-align:center">O robô passa a consultar esta rota 3x por dia.</p>
+    <p class="hint" style="text-align:center">O robô passa a consultar esta rota 1x por dia (~06h17).</p>
   </div>`;
 }
 
@@ -606,7 +644,7 @@ function telaNotificacoes() {
 
     <div class="tipcard" style="margin-top:16px">
       <span class="ic">${ic('bell', 20)}</span>
-      <p><b>Dica.</b> Ative as notificações push para ser avisado em tempo real, 3x por dia (06h · 14h · 22h).</p>
+      <p><b>Dica.</b> Ative as notificações push para ser avisado assim que a consulta diária (~06h17) achar uma tarifa menor.</p>
     </div>
   </div>`;
 }
@@ -636,9 +674,7 @@ const abasViagens = (ativa) => `<div class="tabs light" style="margin-bottom:14p
 // Horários de cada trajeto, lidos da última consulta salva (não gasta requisição).
 function telaInfo() {
   const lista = S.watches.filter((w) => w.active);
-  const quando = (c) => c
-    ? new Date(c).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ' às')
-    : null;
+  const quando = fmtQuando;
 
   const bloco = (w) => {
     const u = S.ultima[w.id];
@@ -646,7 +682,7 @@ function telaInfo() {
       .filter((o) => o.departure)
       .sort((a, b) => String(a.departure).localeCompare(String(b.departure)));
     const barato = ofertas.length ? ofertas.reduce((a, b) => (b.price < a.price ? b : a)) : null;
-    const faixa = w.outbound_times ? `partida ${w.outbound_times.replace(',', 'h–')}h` : 'qualquer horário';
+    const faixa = faixaTxt(w);
 
     const linhas = ofertas.map((o) => `
       <div class="row" style="padding:10px 0">
@@ -670,18 +706,22 @@ function telaInfo() {
         ? `<div style="margin-top:8px">${linhas}</div>
            <div class="muted small" style="margin-top:8px">Atualizado em ${quando(u.checked_at)} · ${ofertas.length} horário${ofertas.length > 1 ? 's' : ''}</div>`
         : `<div class="muted small" style="margin-top:12px">Ainda sem horários salvos para este trajeto. Eles aparecem após a próxima consulta.</div>`}
-      <button class="btn ghost" style="margin-top:12px" data-go="#/viagem/${w.id}">Ver detalhes</button>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn ghost" style="flex:1" data-go="#/viagem/${w.id}">Detalhes</button>
+        <a class="btn ghost" style="flex:1;text-align:center" href="${linkSkyscanner(w)}" target="_blank" rel="noopener noreferrer">Skyscanner</a>
+      </div>
     </div>`;
   };
 
   return `${topbar('Minhas viagens')}
   <div class="wrap">
     ${abasViagens('info')}
+    ${cardAtualizacao()}
     ${lista.length ? lista.map(bloco).join('')
       : `<div class="empty" style="margin:0">Nenhum trajeto ativo. Toque no + para criar um alerta.</div>`}
     <div class="tipcard">
       <span class="ic">${ic('info', 20)}</span>
-      <p>Os horários vêm da última consulta de cada trajeto (3x por dia) e mostram as opções mais baratas encontradas, não todos os voos do dia.</p>
+      <p>Os horários vêm da última consulta de cada trajeto (1x por dia) e mostram as opções mais baratas encontradas, não todos os voos do dia.</p>
     </div>
   </div>`;
 }
@@ -689,7 +729,7 @@ function telaInfo() {
 function telaViagem(id) {
   if (!id) {
     return `${topbar('Minhas viagens')}
-    <div class="wrap">${abasViagens('viagens')}${S.watches.length
+    <div class="wrap">${abasViagens('viagens')}${cardAtualizacao()}${S.watches.length
       ? `<div class="rows">${S.watches.map((w) => linhaAlerta(w)).join('')}</div>`
       : `<div class="empty" style="margin:0">Nenhuma viagem monitorada.</div>`}</div>`;
   }
@@ -723,7 +763,8 @@ function telaViagem(id) {
     <div style="margin-top:12px">
       <b style="font-size:17px">${esc(cidade(w.arrival_id))}</b>
       <div class="muted small">${dataLonga(w.outbound_date)}</div>
-      <div class="muted small">${ic('users', 14)} ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''} · ${w.outbound_times ? `partida ${w.outbound_times.replace(',', 'h–')}h` : 'qualquer horário'}</div>
+      <div class="muted small">${ic('users', 14)} ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''} · ${faixaTxt(w)}</div>
+      <div class="muted small">${ic('clock', 14)} Atualizado em ${S.ultima[w.id]?.checked_at ? fmtQuando(S.ultima[w.id].checked_at) : '—'} · próxima ~${fmtQuando(proximaAtualizacao())}</div>
     </div>
 
     <div class="section-title">Voos encontrados <span class="muted small" style="font-weight:500">${of.length} de ${total}</span></div>
@@ -740,6 +781,9 @@ function telaViagem(id) {
       ${ic('plane', 18)} Ver passagem no Google Flights
     </a>
     <p class="hint" style="text-align:center;margin:8px 0 0">Abre a busca já preenchida com a rota, as datas e ${w.adults || 1} passageiro${(w.adults || 1) > 1 ? 's' : ''}.</p>
+    <a class="btn ghost" style="margin-top:12px;text-align:center" href="${linkSkyscanner(w)}" target="_blank" rel="noopener noreferrer">
+      Ver passagem no Skyscanner
+    </a>
     <button class="btn ghost" style="margin:12px 0 0" data-go="#/historico/${w.id}">Ver histórico de preços</button>
   </div>`;
 }
@@ -765,7 +809,7 @@ function telaPerfil() {
     ${itens.map(([i, t, go]) => `<button data-go="${go}"><span class="ic">${ic(i, 20)}</span><span style="flex:1">${t}</span><span class="chev">${ic('right', 18)}</span></button>`).join('')}
     <button class="danger" data-go="#/"><span class="ic">${ic('logout', 20)}</span><span style="flex:1">Sair</span></button>
   </div>
-  <p class="hint" style="text-align:center;margin-top:16px">Fly Alert · dados via Google Flights (SerpApi) · build 14</p>`;
+  <p class="hint" style="text-align:center;margin-top:16px">Fly Alert · dados via Google Flights (SerpApi) · build 15</p>`;
 }
 
 /* ---------------- navegação ---------------- */
