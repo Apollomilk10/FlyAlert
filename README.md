@@ -182,7 +182,7 @@ cortam três horas de conexão.
 a todo o histórico: barato se é menor que 75% ou mais das leituras, caro se é menor que só
 25% ou menos. Com menos de 8 leituras o veredito é provisório ("poucos dados").
 
-**Economia de buscas.** O robô roda todo dia às 06h17 (Brasília), mas consulta cada
+**Economia de buscas.** O robô é agendado todo dia às 06h17 (Brasília) — o GitHub atrasa e na prática ele roda entre 11h e 15h — e consulta cada
 trajeto só conforme a proximidade da viagem: mais de 90 dias → a cada 3 dias; de 30 a 90 →
 a cada 2; menos de 30 → todo dia. O botão manual do workflow tem a opção *forcar* para
 consultar tudo na hora.

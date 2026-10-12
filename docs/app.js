@@ -61,7 +61,7 @@ const faixaTxt = (w) => (w.outbound_times ? `partida ${w.outbound_times.replace(
 
 /* Atualização dos dados: o robô roda todo dia às 06h17 de Brasília (cron 17 9 * * * UTC), mas só consulta
    cada trajeto conforme a proximidade da viagem: >90 dias a cada 3 dias · 30–90 a cada 2 · <30 todo dia. */
-const ATUALIZA_UTC = [9, 17];
+const ATUALIZA_UTC = [16, 0]; // agendado para 09:17 UTC, mas o GitHub costuma atrasar: na prática roda por volta de 13h (Brasília)
 const BUSCAS_MES = 250, RESERVA_BUSCAS = 10; // plano gratuito da SerpApi
 const fmtQuando = (d) => new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ' às');
 const intervaloDias = (w) => {
@@ -106,9 +106,9 @@ function cardAtualizacao() {
     <b style="font-size:15px">Atualização dos dados</b>
     <div class="row" style="padding:9px 0"><span class="info"><b>Última atualização</b></span><span>${r.ultima ? fmtQuando(r.ultima) : '—'}</span></div>
     <div class="row" style="padding:9px 0"><span class="info"><b>Próxima (aprox.)</b></span><span>${r.proxima ? fmtQuando(r.proxima) : '—'}</span></div>
-    <div class="row" style="padding:9px 0"><span class="info"><b>Robô</b></span><span>todo dia · 06h17</span></div>
+    <div class="row" style="padding:9px 0"><span class="info"><b>Robô</b></span><span>todo dia · ~13h</span></div>
     <div class="row" style="padding:9px 0"><span class="info"><b>Buscas por mês</b></span><span>~${r.buscasMes} de ${BUSCAS_MES}</span></div>
-    <div class="muted small" style="margin-top:6px">Cada trajeto é consultado a cada 3 dias quando faltam mais de 90 dias para a viagem, a cada 2 entre 30 e 90, e todo dia nos últimos 30. Cada consulta gasta 1 busca. Cabem até ${maxAlertas} alertas diários na cota gratuita.</div>
+    <div class="muted small" style="margin-top:6px">Cada trajeto é consultado a cada 3 dias quando faltam mais de 90 dias para a viagem, a cada 2 entre 30 e 90, e todo dia nos últimos 30. O GitHub costuma atrasar o horário agendado (06h17); na prática o robô roda entre 11h e 15h. Cada consulta gasta 1 busca. Cabem até ${maxAlertas} alertas diários na cota gratuita.</div>
   </div>`;
 }
 
@@ -546,7 +546,7 @@ function telaHistorico(id) {
 
   const dicas = [
     [ic('clock', 18), `Faltam <b>${antecedencia} dias</b> para a viagem. A faixa mais barata costuma aparecer entre 60 e 90 dias antes.`],
-    [ic('cal2', 18), `Terça e quarta são os dias com os preços mais baixos — o robô consulta de 1 a 3 dias, conforme a viagem se aproxima (~06h17).`],
+    [ic('cal2', 18), `Terça e quarta são os dias com os preços mais baixos — o robô consulta de 1 a 3 dias, conforme a viagem se aproxima (~13h).`],
     [ic('plane', 18), `Voos diretos podem sair mais caros, mas economizam tempo. Compare na aba da viagem.`],
   ];
 
@@ -703,7 +703,7 @@ function telaNotificacoes() {
 
     <div class="tipcard" style="margin-top:16px">
       <span class="ic">${ic('bell', 20)}</span>
-      <p><b>Dica.</b> Ative as notificações push para ser avisado assim que uma consulta (~06h17) achar uma tarifa menor.</p>
+      <p><b>Dica.</b> Ative as notificações push para ser avisado assim que uma consulta (~13h) achar uma tarifa menor.</p>
     </div>
   </div>`;
 }
@@ -780,7 +780,7 @@ function telaInfo() {
       : `<div class="empty" style="margin:0">Nenhum trajeto ativo. Toque no + para criar um alerta.</div>`}
     <div class="tipcard">
       <span class="ic">${ic('info', 20)}</span>
-      <p>Os horários vêm da última consulta de cada trajeto (~06h17) e mostram as opções mais baratas encontradas, não todos os voos do dia.</p>
+      <p>Os horários vêm da última consulta de cada trajeto (~13h) e mostram as opções mais baratas encontradas, não todos os voos do dia.</p>
     </div>
   </div>`;
 }
@@ -868,7 +868,7 @@ function telaPerfil() {
     ${itens.map(([i, t, go]) => `<button data-go="${go}"><span class="ic">${ic(i, 20)}</span><span style="flex:1">${t}</span><span class="chev">${ic('right', 18)}</span></button>`).join('')}
     <button class="danger" data-go="#/"><span class="ic">${ic('logout', 20)}</span><span style="flex:1">Sair</span></button>
   </div>
-  <p class="hint" style="text-align:center;margin-top:16px">Fly Alert · dados via Google Flights (SerpApi) · build 17</p>`;
+  <p class="hint" style="text-align:center;margin-top:16px">Fly Alert · dados via Google Flights (SerpApi) · build 18</p>`;
 }
 
 /* ---------------- navegação ---------------- */
