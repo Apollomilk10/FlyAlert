@@ -182,10 +182,7 @@ cortam três horas de conexão.
 a todo o histórico: barato se é menor que 75% ou mais das leituras, caro se é menor que só
 25% ou menos. Com menos de 8 leituras o veredito é provisório ("poucos dados").
 
-**Economia de buscas.** O robô é agendado todo dia às 06h17 (Brasília) — o GitHub atrasa e na prática ele roda entre 11h e 15h — e consulta cada
-trajeto só conforme a proximidade da viagem: mais de 90 dias → a cada 3 dias; de 30 a 90 →
-a cada 2; menos de 30 → todo dia. O botão manual do workflow tem a opção *forcar* para
-consultar tudo na hora.
+**Frequência e cota.** O robô é agendado todo dia às 06h17 (Brasília) — o GitHub atrasa e na prática ele roda entre 11h e 15h — e consulta todos os trajetos ativos, 1 busca por trajeto. Com 4 alertas são ~120 buscas por mês; a cota gratuita da SerpApi comporta até 8 alertas diários. O orçamento em `check-price.mjs` lê o saldo real e, se faltar cota, usa o Apify como reserva.
 
 O visual segue o Figma do app: azul de aviação sobre fundo claro, cartões
 arredondados e gráfico de área.

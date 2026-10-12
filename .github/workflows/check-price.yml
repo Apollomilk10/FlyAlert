@@ -2,15 +2,10 @@ name: Checar preços
 
 on:
   schedule:
-    # 1x/dia (UTC) = 06h17 em Brasília. Cada rota só é consultada conforme a proximidade
-    # da viagem (>90 dias: a cada 3 dias; 30-90: a cada 2; <30: todo dia) — ver check-price.mjs.
+    # Todo dia (UTC) = 06h17 em Brasília (o GitHub costuma atrasar umas horas).
+    # Cada alerta ativo gasta 1 busca por dia; o orçamento em check-price.mjs protege a cota.
     - cron: '17 9 * * *'
   workflow_dispatch:        # botão pra rodar na mão
-    inputs:
-      forcar:
-        description: 'Consultar todas as rotas agora, ignorando o intervalo'
-        type: boolean
-        default: false
 
 concurrency:
   group: check-price
@@ -29,7 +24,6 @@ jobs:
 
       - name: Consultar preços e alertar
         env:
-          FORCAR: ${{ inputs.forcar }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           # Opcionais (Settings > Variables > Actions): dia em que a cota renova, folga e limite de reserva

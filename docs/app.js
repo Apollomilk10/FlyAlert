@@ -59,15 +59,11 @@ const linkSkyscanner = (w) => {
 };
 const faixaTxt = (w) => (w.outbound_times ? `partida ${w.outbound_times.replace(',', 'h–')}h` : 'qualquer horário');
 
-/* Atualização dos dados: o robô roda todo dia às 06h17 de Brasília (cron 17 9 * * * UTC), mas só consulta
-   cada trajeto conforme a proximidade da viagem: >90 dias a cada 3 dias · 30–90 a cada 2 · <30 todo dia. */
+/* Atualização dos dados: o robô é agendado todo dia às 06h17 de Brasília (cron 17 9 * * * UTC) e consulta todos os trajetos ativos, 1 busca por trajeto. */
 const ATUALIZA_UTC = [16, 0]; // agendado para 09:17 UTC, mas o GitHub costuma atrasar: na prática roda por volta de 13h (Brasília)
 const BUSCAS_MES = 250, RESERVA_BUSCAS = 10; // plano gratuito da SerpApi
 const fmtQuando = (d) => new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ' às');
-const intervaloDias = (w) => {
-  const dias = Math.round((D(w.outbound_date) - Date.now()) / 86400000);
-  return dias > 90 ? 3 : dias > 30 ? 2 : 1;
-};
+const intervaloDias = () => 1; // todos os trajetos são consultados todos os dias
 const ultimaReal = (w) => {
   const p = [...(S.checks[w.id] || [])].reverse().find((x) => x.live);
   return p ? p.t : null;
@@ -108,7 +104,7 @@ function cardAtualizacao() {
     <div class="row" style="padding:9px 0"><span class="info"><b>Próxima (aprox.)</b></span><span>${r.proxima ? fmtQuando(r.proxima) : '—'}</span></div>
     <div class="row" style="padding:9px 0"><span class="info"><b>Robô</b></span><span>todo dia · ~13h</span></div>
     <div class="row" style="padding:9px 0"><span class="info"><b>Buscas por mês</b></span><span>~${r.buscasMes} de ${BUSCAS_MES}</span></div>
-    <div class="muted small" style="margin-top:6px">Cada trajeto é consultado a cada 3 dias quando faltam mais de 90 dias para a viagem, a cada 2 entre 30 e 90, e todo dia nos últimos 30. O GitHub costuma atrasar o horário agendado (06h17); na prática o robô roda entre 11h e 15h. Cada consulta gasta 1 busca. Cabem até ${maxAlertas} alertas diários na cota gratuita.</div>
+    <div class="muted small" style="margin-top:6px">Todos os trajetos são consultados todo dia, 1 busca por consulta. O GitHub costuma atrasar o horário agendado (06h17); na prática o robô roda entre 11h e 15h. Cabem até ${maxAlertas} alertas diários na cota gratuita.</div>
   </div>`;
 }
 
@@ -546,7 +542,7 @@ function telaHistorico(id) {
 
   const dicas = [
     [ic('clock', 18), `Faltam <b>${antecedencia} dias</b> para a viagem. A faixa mais barata costuma aparecer entre 60 e 90 dias antes.`],
-    [ic('cal2', 18), `Terça e quarta são os dias com os preços mais baixos — o robô consulta de 1 a 3 dias, conforme a viagem se aproxima (~13h).`],
+    [ic('cal2', 18), `Terça e quarta são os dias com os preços mais baixos — o robô consulta todo dia (~13h).`],
     [ic('plane', 18), `Voos diretos podem sair mais caros, mas economizam tempo. Compare na aba da viagem.`],
   ];
 
@@ -627,7 +623,7 @@ function telaNovo() {
         </select></div></div>
 
     <button class="btn" id="btn-criar" style="margin:20px 0 8px">Criar alerta</button>
-    <p class="hint" style="text-align:center">O robô consulta esta rota todo dia perto da viagem e a cada 2–3 dias quando ela ainda está longe.</p>
+    <p class="hint" style="text-align:center">O robô consulta esta rota todo dia (~13h).</p>
   </div>`;
 }
 
@@ -868,7 +864,7 @@ function telaPerfil() {
     ${itens.map(([i, t, go]) => `<button data-go="${go}"><span class="ic">${ic(i, 20)}</span><span style="flex:1">${t}</span><span class="chev">${ic('right', 18)}</span></button>`).join('')}
     <button class="danger" data-go="#/"><span class="ic">${ic('logout', 20)}</span><span style="flex:1">Sair</span></button>
   </div>
-  <p class="hint" style="text-align:center;margin-top:16px">Fly Alert · dados via Google Flights (SerpApi) · build 18</p>`;
+  <p class="hint" style="text-align:center;margin-top:16px">Fly Alert · dados via Google Flights (SerpApi) · build 19</p>`;
 }
 
 /* ---------------- navegação ---------------- */
