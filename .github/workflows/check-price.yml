@@ -5,6 +5,8 @@ on:
     # Todo dia (UTC) = 06h17 em Brasília (o GitHub costuma atrasar umas horas).
     # Cada alerta ativo gasta 1 busca por dia; o orçamento em check-price.mjs protege a cota.
     - cron: '17 9 * * *'
+  push:
+    paths: ['.run-now']
   workflow_dispatch:        # botão pra rodar na mão
 
 concurrency:
