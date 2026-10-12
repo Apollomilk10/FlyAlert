@@ -1,8 +1,9 @@
-/* Fly Alert — painel de preços (só ida): o preço de agora está barato ou caro em relação ao histórico? */
+/* Fly Alert — app do Figma, dados reais do Supabase. */
 
 const SUPABASE_URL = 'https://qnxyjzmqubzdkouvzewq.supabase.co';
 const SUPABASE_ANON = 'sb_publishable_glj1x8t-y-vGdhozSBW84Q_rLRlkdbk';
 const ONESIGNAL_APP_ID = '11593a31-7feb-45b9-aad9-5d1eb46bf1c7';
+const USUARIO = { nome: 'Lucas Tavares', email: 'lucas@email.com' };
 
 /* ---------------- helpers ---------------- */
 
@@ -16,7 +17,6 @@ const dataLonga = (d) => D(d).toLocaleDateString('pt-BR', { day: '2-digit', mont
 const hhmm = (t) => (t ? String(t).split(' ')[1]?.slice(0, 5) ?? '' : '');
 const durStr = (m) => (m == null ? '—' : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}min`);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const fmtQuando = (d) => new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ' às');
 
 const CIDADES = {
   GRU: 'São Paulo', CGH: 'São Paulo', VCP: 'Campinas', SSA: 'Salvador',
@@ -32,17 +32,19 @@ const cidade = (ids) => {
   return nomes[0];
 };
 const rota = (w) => `${cidade(w.departure_id)} → ${cidade(w.arrival_id)}`;
-const sigla = (ids) => String(ids).split(',')[0].trim();
-const faixaTxt = (w) => (w.outbound_times ? `partida ${w.outbound_times.replace(',', 'h–')}h` : 'qualquer horário');
-
 const linkGoogleFlights = (w) => {
   const q = [
     `Flights from ${sigla(w.departure_id)} to ${sigla(w.arrival_id)}`,
-    `on ${w.outbound_date}`, 'oneway',
+    `on ${w.outbound_date}`,
+    w.return_date ? `through ${w.return_date}` : 'oneway',
     (w.adults || 1) > 1 ? `${w.adults} adults` : '',
   ].filter(Boolean).join(' ');
   return `https://www.google.com/travel/flights?q=${encodeURIComponent(q)}&curr=BRL&hl=pt-BR&gl=BR`;
 };
+const periodo = (w) => w.return_date
+  ? `${diaMes(w.outbound_date)} → ${diaMes(w.return_date)} ${D(w.return_date).getFullYear()}`
+  : `${diaMes(w.outbound_date)} ${D(w.outbound_date).getFullYear()}`;
+const sigla = (ids) => String(ids).split(',')[0].trim();
 
 // Skyscanner (só ida). Vários aeroportos da mesma cidade viram o código da cidade.
 const skyId = (ids) => {
@@ -55,6 +57,90 @@ const linkSkyscanner = (w) => {
   const [a, m, d] = w.outbound_date.split('-');
   return `https://www.skyscanner.com.br/transporte/passagens-aereas/${skyId(w.departure_id)}/${skyId(w.arrival_id)}/${a.slice(2)}${m}${d}/?adultsv2=${w.adults || 1}&cabinclass=economy&rtn=0`;
 };
+const faixaTxt = (w) => (w.outbound_times ? `partida ${w.outbound_times.replace(',', 'h–')}h` : 'qualquer horário');
+
+/* Atualização dos dados: o robô roda todo dia às 06h17 de Brasília (cron 17 9 * * * UTC), mas só consulta
+   cada trajeto conforme a proximidade da viagem: >90 dias a cada 3 dias · 30–90 a cada 2 · <30 todo dia. */
+const ATUALIZA_UTC = [9, 17];
+const BUSCAS_MES = 250, RESERVA_BUSCAS = 10; // plano gratuito da SerpApi
+const fmtQuando = (d) => new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ' às');
+const intervaloDias = (w) => {
+  const dias = Math.round((D(w.outbound_date) - Date.now()) / 86400000);
+  return dias > 90 ? 3 : dias > 30 ? 2 : 1;
+};
+const ultimaReal = (w) => {
+  const p = [...(S.checks[w.id] || [])].reverse().find((x) => x.live);
+  return p ? p.t : null;
+};
+function proximaConsulta(w) {
+  const ult = ultimaReal(w);
+  const t = Math.max(Date.now(), ult ? ult + (intervaloDias(w) * 24 - 3) * 3600000 : 0);
+  const d = new Date(t);
+  let c = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), ATUALIZA_UTC[0], ATUALIZA_UTC[1]);
+  if (c < t) c += 86400000;
+  return c;
+}
+function resumoAtualizacao() {
+  const hoje = new Date().toISOString().slice(0, 10);
+  const ativos = S.watches.filter((w) => w.active && w.outbound_date >= hoje);
+  const ultima = Math.max(0, ...S.watches.map((w) => ultimaReal(w) || 0));
+  return {
+    ultima: ultima || null,
+    proxima: ativos.length ? Math.min(...ativos.map(proximaConsulta)) : null,
+    buscasMes: Math.round(ativos.reduce((n, w) => n + 30 / intervaloDias(w), 0)),
+  };
+}
+// Carimbo fixo no canto superior: data e hora da última leitura de preços gravada.
+function atualizarCarimbo() {
+  const el = $('stamp');
+  if (!el) return;
+  const t = resumoAtualizacao().ultima;
+  el.innerHTML = t
+    ? `${ic('clock', 12)} Atualizado em ${new Date(t).toLocaleDateString('pt-BR')} às ${new Date(t).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+    : (S.carregado ? 'Sem leituras ainda' : 'Carregando…');
+}
+function cardAtualizacao() {
+  const r = resumoAtualizacao();
+  const maxAlertas = Math.floor((BUSCAS_MES - RESERVA_BUSCAS) / 30);
+  return `<div class="card" style="margin-bottom:14px">
+    <b style="font-size:15px">Atualização dos dados</b>
+    <div class="row" style="padding:9px 0"><span class="info"><b>Última atualização</b></span><span>${r.ultima ? fmtQuando(r.ultima) : '—'}</span></div>
+    <div class="row" style="padding:9px 0"><span class="info"><b>Próxima (aprox.)</b></span><span>${r.proxima ? fmtQuando(r.proxima) : '—'}</span></div>
+    <div class="row" style="padding:9px 0"><span class="info"><b>Robô</b></span><span>todo dia · 06h17</span></div>
+    <div class="row" style="padding:9px 0"><span class="info"><b>Buscas por mês</b></span><span>~${r.buscasMes} de ${BUSCAS_MES}</span></div>
+    <div class="muted small" style="margin-top:6px">Cada trajeto é consultado a cada 3 dias quando faltam mais de 90 dias para a viagem, a cada 2 entre 30 e 90, e todo dia nos últimos 30. Cada consulta gasta 1 busca. Cabem até ${maxAlertas} alertas diários na cota gratuita.</div>
+  </div>`;
+}
+
+/* Veredito: o preço de agora está barato ou caro em relação a todo o histórico? */
+function analise(w) {
+  const vals = (S.checks[w.id] || []).map((p) => p.v);
+  const n = vals.length;
+  if (!n) return null;
+  const atual = vals[n - 1];
+  const media = vals.reduce((a, b) => a + b, 0) / n;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const maisBaratoQue = Math.round((100 * vals.filter((v) => v > atual).length) / n);
+  const vsMedia = media ? Math.round(((atual - media) / media) * 100) : 0;
+  let nivel;
+  if (n < 8) nivel = 'poucos';
+  else if (max - min < media * 0.05) nivel = 'estavel';
+  else if (maisBaratoQue >= 75) nivel = 'barato';
+  else if (maisBaratoQue <= 25) nivel = 'caro';
+  else nivel = 'media';
+  return { n, atual, media, min, max, maisBaratoQue, vsMedia, nivel };
+}
+const VD = { barato: ['Barato agora', 'barato'], media: ['Na média', 'media'], caro: ['Caro agora', 'caro'], estavel: ['Preço estável', 'media'], poucos: ['Poucos dados', 'poucos'] };
+const vdBadge = (a) => (a ? `<span class="vd ${VD[a.nivel][1]}">${VD[a.nivel][0]}</span>` : '<span class="vd poucos">Sem dados</span>');
+function fraseVeredito(a, w) {
+  const comp = a.nivel === 'poucos'
+    ? `Só ${a.n} leitura${a.n > 1 ? 's' : ''} no histórico: veredito provisório.`
+    : `Mais barato que ${a.maisBaratoQue}% das ${a.n} leituras do histórico.`;
+  const media = a.atual <= a.min && a.n > 1 ? 'É o menor preço já registrado.'
+    : a.vsMedia === 0 ? `Igual à média (${brl(a.media, w.currency)}).`
+    : `${Math.abs(a.vsMedia)}% ${a.vsMedia < 0 ? 'abaixo' : 'acima'} da média (${brl(a.media, w.currency)}).`;
+  return `${comp} ${media}`;
+}
 
 const GRADS = [
   ['#1D6FE8', '#0B2447'], ['#2E9AD6', '#12467B'], ['#3AA680', '#0E3B57'],
@@ -74,14 +160,22 @@ const ICONS = {
   plus: 'M12 5v14M5 12h14',
   right: 'm9 18 6-6-6-6',
   left: 'm15 18-6-6 6-6',
+  bookmark: 'M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
   calendar: 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z',
   pin: 'M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0M12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5',
+  bulb: 'M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2',
   clock: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 6v6l4 2',
+  card: 'M3 10h18M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z',
+  help: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M9.5 9a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.9-.9 1.5v.7M12 17h.01',
   info: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 16v-5M12 8h.01',
+  logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
   check: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M8.5 12.5l2.5 2.5 4.5-5',
   trend: 'M3 17l6-6 4 4 8-8M15 7h6v6',
   users: 'M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.8',
+  x: 'M18 6 6 18M6 6l12 12',
   cal2: 'M3 9h18M7 3v4M17 3v4M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z',
+  hist: 'M12 22a10 10 0 1 0-9.9-11M12 7v5l3.5 2M2 6v5h5',
+  money: 'M12 2v20M17 6.5c0-1.9-2.2-3-5-3s-5 1.1-5 3 2.2 2.8 5 3.4 5 1.4 5 3.4-2.2 3.2-5 3.2-5-1.3-5-3.2',
 };
 const ic = (n, size = 20, cls = '') =>
   `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -91,14 +185,24 @@ const ic = (n, size = 20, cls = '') =>
 
 const S = {
   watches: [],
-  checks: {},      // watch_id -> [{t, v, live}] em ordem cronológica (histórico completo)
-  ofertas: {},     // watch_id -> {offers, checked_at} da última leitura real
-  alertas: [],     // alerts_sent (carregado só ao abrir Ajustes)
-  alertasOk: false,
+  checks: {},           // watch_id -> [{t, v, price_level, ...}]
+  alertas: [],          // alerts_sent
+  ultima: {},           // watch_id -> último price_check completo
+  filtros: carregarFiltros(),
   carregado: false,
   erro: null,
-  view: { tabAlertas: 'ativos', janela: 'tudo' },
+  view: { tabAlertas: 'ativos', legAberta: null, janela: 'tudo' },
 };
+
+function carregarFiltros() {
+  try {
+    return Object.assign(
+      { escalas: 'todas', horarios: [], cias: [] },
+      JSON.parse(localStorage.getItem('fa_filtros') || '{}')
+    );
+  } catch { return { escalas: 'todas', horarios: [], cias: [] }; }
+}
+const salvarFiltros = () => localStorage.setItem('fa_filtros', JSON.stringify(S.filtros));
 
 /* ---------------- API ---------------- */
 
@@ -117,135 +221,53 @@ async function api(path, options = {}) {
   return res.status === 204 ? null : res.json();
 }
 
-// Economia de requisições: o histórico vem leve (sem o JSON de ofertas) e as ofertas
-// só da última leitura real de cada trajeto, em uma segunda chamada.
 async function carregar() {
+  // Só trajetos de sentido único: alertas antigos de ida e volta não aparecem mais.
   const watches = (await api('watches?select=*&order=outbound_date.asc'))
     .filter((w) => w.trip_type === 2 && !w.return_date);
   const ids = watches.map((w) => `"${w.id}"`).join(',');
-  const linhas = ids
-    ? await api(`price_checks?watch_id=in.(${ids})&select=id,watch_id,price,source,checked_at&order=checked_at.desc&limit=1000`)
-    : [];
-  linhas.reverse();
-
-  const checks = {}, ultimoReal = {};
-  for (const c of linhas) {
-    const real = c.source !== 'google_history';
-    (checks[c.watch_id] ||= []).push({ t: Date.parse(c.checked_at), v: Number(c.price), live: real });
-    if (real) ultimoReal[c.watch_id] = c;
-  }
-
-  const idsReais = Object.values(ultimoReal).map((c) => `"${c.id}"`).join(',');
-  const ofertas = {};
-  if (idsReais) {
-    for (const r of await api(`price_checks?id=in.(${idsReais})&select=watch_id,offers,checked_at`)) ofertas[r.watch_id] = r;
-  }
+  const [checks, alertas] = await Promise.all([
+    ids ? api(`price_checks?watch_id=in.(${ids})&select=watch_id,price,currency,price_level,typical_low,typical_high,airline,duration_min,offers,source,checked_at&order=checked_at.asc&limit=4000`) : [],
+    api('alerts_sent?select=*&order=sent_at.desc&limit=20').catch(() => []),
+  ]);
 
   S.watches = watches;
-  S.checks = checks;
-  S.ofertas = ofertas;
+  S.checks = {};
+  S.ultima = {};
+  for (const c of checks) {
+    (S.checks[c.watch_id] ||= []).push({ t: new Date(c.checked_at).getTime(), v: Number(c.price), live: c.source !== 'google_history' });
+    S.ultima[c.watch_id] = c;
+  }
+  S.alertas = alertas;
   S.carregado = true;
 }
 
-async function carregarAlertas() {
-  try {
-    S.alertas = await api('alerts_sent?select=*&order=sent_at.desc&limit=8');
-  } catch { S.alertas = []; }
-  S.alertasOk = true;
-}
-
-/* ---------------- análise: barato ou caro vs. histórico ---------------- */
+/* ---------------- métricas ---------------- */
 
 const DIA = 86400000;
 
-function analise(w) {
+function stats(w) {
   const pts = S.checks[w.id] || [];
   if (!pts.length) return null;
+  const agora = Date.now();
   const vals = pts.map((p) => p.v);
-  const n = vals.length;
-  const atual = vals[n - 1];
-  const media = vals.reduce((a, b) => a + b, 0) / n;
-  const min = Math.min(...vals), max = Math.max(...vals);
-  const maisBaratoQue = Math.round((100 * vals.filter((v) => v > atual).length) / n);
-  const vsMedia = media ? Math.round(((atual - media) / media) * 100) : 0;
-  const ref = [...pts].reverse().find((p) => p.t <= Date.now() - 7 * DIA);
-  const delta7 = ref ? atual - ref.v : null;
-
-  let nivel;
-  if (n < 8) nivel = 'poucos';
-  else if (max - min < media * 0.05) nivel = 'estavel';
-  else if (maisBaratoQue >= 75) nivel = 'barato';
-  else if (maisBaratoQue <= 25) nivel = 'caro';
-  else nivel = 'media';
-
-  const pos = max > min ? Math.min(100, Math.max(0, ((atual - min) / (max - min)) * 100)) : 50;
-  const vezes = pts.filter((p) => p.live).length;
-  return { n, vezes, atual, media, min, max, maisBaratoQue, vsMedia, delta7, nivel, pos, primeiro: pts[0].t };
-}
-
-const VD = {
-  barato: ['Barato agora', 'barato'], media: ['Na média', 'media'], caro: ['Caro agora', 'caro'],
-  estavel: ['Preço estável', 'media'], poucos: ['Poucos dados', 'poucos'],
-};
-const vdBadge = (a) => (a
-  ? `<span class="vd ${VD[a.nivel][1]}">${VD[a.nivel][0]}</span>`
-  : '<span class="vd poucos">Sem dados</span>');
-
-function frasesAnalise(a, w) {
-  const out = [];
-  if (a.nivel === 'poucos') {
-    out.push(`Só ${a.n} leitura${a.n > 1 ? 's' : ''} no histórico: o veredito ainda é provisório.`);
-  } else {
-    out.push(`Mais barato que ${a.maisBaratoQue}% das ${a.n} leituras do histórico.`);
+  const j30 = pts.filter((p) => agora - p.t <= 30 * DIA).map((p) => p.v);
+  const base = j30.length > 1 ? j30 : vals;
+  const atual = vals[vals.length - 1];
+  const media = base.reduce((a, b) => a + b, 0) / base.length;
+  const min = Math.min(...vals);
+  const max = Math.max(...base);
+  const pct = media ? Math.round(((atual - media) / media) * 100) : 0;
+  let quedas = 0;
+  for (let i = 1; i < pts.length; i++) {
+    if (agora - pts[i].t <= 30 * DIA && pts[i - 1].v - pts[i].v >= 50) quedas++;
   }
-  if (a.atual <= a.min && a.n > 1) out.push('É o menor preço já registrado.');
-  else if (a.vsMedia !== 0) out.push(`${Math.abs(a.vsMedia)}% ${a.vsMedia < 0 ? 'abaixo' : 'acima'} da média (${brl(a.media, w.currency)}).`);
-  else out.push(`Igual à média (${brl(a.media, w.currency)}).`);
-  if (a.delta7 != null) {
-    out.push(Math.abs(a.delta7) < 10 ? 'Estável nos últimos 7 dias.' : `Nos últimos 7 dias: ${a.delta7 < 0 ? '↓' : '↑'} ${brl(Math.abs(a.delta7), w.currency)}.`);
-  }
-  return out;
+  return { atual, media, min, max, pct, quedas, economia: Math.max(0, media - atual), leituras: pts.length, primeiro: pts[0].t };
 }
-
-const faixaPreco = (a, w) => `
-  <div class="faixa"><i style="left:${a.pos.toFixed(1)}%"></i></div>
-  <div class="vlab"><span>mín ${brl(a.min, w.currency)}</span><span>média ${brl(a.media, w.currency)}</span><span>máx ${brl(a.max, w.currency)}</span></div>`;
-
-/* ---------------- frequência de atualização ---------------- */
-
-// O robô (.github/workflows/check-price.yml) roda todo dia às 06h17 de Brasília (09:17 UTC),
-// mas só consulta cada trajeto conforme a proximidade da viagem — é o que economiza buscas:
-// mais de 90 dias → a cada 3 dias · de 30 a 90 → a cada 2 · menos de 30 → todo dia.
-const ATUALIZA_UTC = [9, 17];
-const BUSCAS_MES = 250, RESERVA_BUSCAS = 10; // plano gratuito da SerpApi
-const intervaloDias = (w) => {
-  const dias = Math.round((D(w.outbound_date) - Date.now()) / DIA);
-  return dias > 90 ? 3 : dias > 30 ? 2 : 1;
-};
-const ultimaReal = (w) => {
-  const p = [...(S.checks[w.id] || [])].reverse().find((x) => x.live);
-  return p ? p.t : null;
-};
-function proximaConsulta(w) {
-  const ult = ultimaReal(w);
-  const t = Math.max(Date.now(), ult ? ult + (intervaloDias(w) * 24 - 3) * 3600000 : 0);
-  const d = new Date(t);
-  let c = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), ATUALIZA_UTC[0], ATUALIZA_UTC[1]);
-  if (c < t) c += DIA;
-  return c;
-}
-function resumoAtualizacao() {
-  const ativos = S.watches.filter((w) => w.active && w.outbound_date >= new Date().toISOString().slice(0, 10));
-  const ultima = Math.max(0, ...ativos.map((w) => ultimaReal(w) || 0));
-  const proxima = ativos.length ? Math.min(...ativos.map(proximaConsulta)) : null;
-  const buscasMes = Math.round(ativos.reduce((s, w) => s + 30 / intervaloDias(w), 0));
-  return { ativos, ultima: ultima || null, proxima, buscasMes };
-}
-
-/* ---------------- gráfico ---------------- */
 
 const JANELAS = [[30, '30d'], [60, '60d'], [90, '90d'], ['tudo', 'Tudo']];
 const CORES_MEDIA = { 30: '#15A05A', 60: '#C97A05', 90: '#7A5AD6' };
+const rotuloJanela = (j) => (j === 'tudo' ? 'período total' : `${j} dias`);
 
 const dentro = (pts, j) => {
   if (j === 'tudo') return pts;
@@ -253,16 +275,48 @@ const dentro = (pts, j) => {
   return pts.filter((d) => agora - d.t <= Number(j) * DIA);
 };
 
+function statsJanela(w, j) {
+  const sel = dentro(S.checks[w.id] || [], j);
+  if (!sel.length) return null;
+  const vals = sel.map((d) => d.v);
+  return {
+    media: vals.reduce((a, b) => a + b, 0) / vals.length,
+    max: Math.max(...vals), min: Math.min(...vals), leituras: sel.length,
+  };
+}
+
 const filtroJanela = () => `<div class="tabs light seg">${JANELAS.map(([v, t]) =>
   `<button class="${String(S.view.janela) === String(v) ? 'on' : ''}" data-janela="${v}">${t}</button>`).join('')}</div>`;
 
-function chart(todos, { janela = 'tudo' } = {}) {
+function resumoGeral() {
+  const ativos = S.watches.filter((w) => w.active);
+  let economia = 0, quedas = 0, potencial = 0, comDados = 0;
+  for (const w of ativos) {
+    const s = stats(w);
+    if (!s) continue;
+    comDados++;
+    economia += s.economia;
+    quedas += s.quedas;
+    potencial += Math.max(0, s.max - s.atual);
+  }
+  return { ativos: ativos.length, economia, quedas, potencial, comDados, total: S.watches.length };
+}
+
+function badge(pct) {
+  if (pct <= -1) return `<span class="badge">↓ ${Math.abs(pct)}%</span>`;
+  if (pct >= 1) return `<span class="badge up">↑ ${pct}%</span>`;
+  return `<span class="badge flat">estável</span>`;
+}
+
+/* ---------------- gráfico ---------------- */
+
+function chart(todos, { alto = false, janela = 'tudo' } = {}) {
   if (!todos || todos.length < 2) return `<p class="muted small">Ainda sem histórico suficiente para o gráfico.</p>`;
   const pts = dentro(todos, janela);
   if (pts.length < 2) {
     return `<p class="muted small">Só ${pts.length} leitura nos últimos ${janela} dias. Escolha um período maior.</p>`;
   }
-  const W = 360, H = 200, PL = 46, PR = 44, PT = 16, PB = 24;
+  const W = 360, H = alto ? 200 : 175, PL = 46, PR = 44, PT = 16, PB = 24;
 
   // reamostra para no máximo 26 pontos, mantendo o primeiro e o último
   const passo = Math.max(1, Math.ceil(pts.length / 26));
@@ -293,19 +347,19 @@ function chart(todos, { janela = 'tudo' } = {}) {
   const X = (t) => (t1 === t0 ? PL : PL + ((t - t0) / (t1 - t0)) * (W - PL - PR));
   const Y = (v) => PT + (1 - (v - y0) / (y1 - y0)) * (H - PT - PB);
 
-  let grade = '';
+  let grade = '', linha = '', pontos = '', datas = '';
   for (let i = 0; i <= 3; i++) {
     const v = y0 + ((y1 - y0) / 3) * i;
     const y = Y(v).toFixed(1);
     grade += `<line x1="${PL}" y1="${y}" x2="${W - PR}" y2="${y}" stroke="#E6ECF4" stroke-width="1"/>
       <text x="${PL - 8}" y="${Number(y) + 3.5}" text-anchor="end" font-size="9.5" fill="#8A99AD">R$ ${num(v)}</text>`;
   }
-  const linha = p.map((d, i) => `${i ? 'L' : 'M'}${X(d.t).toFixed(1)},${Y(d.v).toFixed(1)}`).join(' ');
+  linha = p.map((d, i) => `${i ? 'L' : 'M'}${X(d.t).toFixed(1)},${Y(d.v).toFixed(1)}`).join(' ');
   const area = `${linha} L${X(t1).toFixed(1)},${H - PB} L${PL},${H - PB} Z`;
-  const pontos = p.map((d) => `<circle cx="${X(d.t).toFixed(1)}" cy="${Y(d.v).toFixed(1)}" r="3" fill="#fff" stroke="#1D6FE8" stroke-width="2"/>`).join('');
+  pontos = p.map((d) => `<circle cx="${X(d.t).toFixed(1)}" cy="${Y(d.v).toFixed(1)}" r="3" fill="#fff" stroke="#1D6FE8" stroke-width="2"/>`).join('');
 
   const marcas = [0, 1, 2, 3].map((i) => p[Math.round((p.length - 1) * (i / 3))]);
-  const datas = [...new Set(marcas)].map((d) =>
+  datas = [...new Set(marcas)].map((d) =>
     `<text x="${X(d.t).toFixed(1)}" y="${H - 6}" text-anchor="middle" font-size="9.5" fill="#8A99AD">${new Date(d.t).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</text>`
   ).join('');
 
@@ -343,66 +397,79 @@ function topbar(titulo, { voltar = null, acao = '' } = {}) {
   </div>`;
 }
 
-// Card do painel: o veredito vem primeiro, depois a comparação com o histórico.
-function cardVeredito(w) {
-  const a = analise(w);
-  return `<button class="vcard" data-go="#/alerta/${w.id}">
-    <div class="vtop"><b>${esc(rota(w))}</b>${vdBadge(a)}</div>
-    <small class="muted">${dataLonga(w.outbound_date)} · ${faixaTxt(w)}</small>
-    ${a ? `<div class="vprice">${brl(a.atual, w.currency)}</div>
-      ${faixaPreco(a, w)}
-      <div class="vtxt">${frasesAnalise(a, w).slice(0, 2).join(' ')}</div>`
-      : `<div class="vtxt" style="margin-top:10px">Ainda sem leituras. A primeira chega na próxima consulta.</div>`}
-  </button>`;
-}
-
-function linhaAlerta(w) {
-  const a = analise(w);
+function linhaAlerta(w, { toggle = false } = {}) {
+  const s = stats(w);
+  const preco = s ? brl(s.atual, w.currency) : '—';
+  const dist = s ? badge(s.pct) : '<span class="badge flat">sem dados</span>';
+  const pax = `${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''}`;
+  const controle = toggle
+    ? `<div class="switch ${w.active ? 'on' : ''}" data-toggle="${w.id}" role="switch" aria-checked="${w.active}" tabindex="0"></div>`
+    : `<span class="chev">${ic('right', 18)}</span>`;
   return `<div class="row">
     <button class="thumb" style="background:${grad(w)}" data-go="#/alerta/${w.id}" aria-label="Abrir alerta">
       ${sigla(w.departure_id)}→${sigla(w.arrival_id)}
     </button>
     <button class="info" data-go="#/alerta/${w.id}">
       <b>${esc(rota(w))}</b>
-      <small class="datas">${dataLonga(w.outbound_date)} · ${faixaTxt(w)}</small>
-      <span class="price">${a ? brl(a.atual, w.currency) : '—'} ${vdBadge(a)}</span>
+      <small class="datas">${periodo(w)}</small>
+      <small>${pax} · só ida · ${faixaTxt(w)}</small>
+      <span class="price">${preco} ${vdBadge(analise(w))}</span>
     </button>
-    <div class="switch ${w.active ? 'on' : ''}" data-toggle="${w.id}" role="switch" aria-checked="${w.active}" tabindex="0"></div>
+    ${controle}
   </div>`;
 }
 
 /* ---------------- telas ---------------- */
 
-function telaHome() {
-  const r = resumoAtualizacao();
-  const itens = r.ativos.map((w) => ({ w, a: analise(w) }));
-  const baratos = itens.filter((x) => x.a?.nivel === 'barato');
-  const caros = itens.filter((x) => x.a?.nivel === 'caro');
+function telaSplash() {
+  return `<div class="splash">
+    <div class="splash-top">
+      <svg class="plane" viewBox="0 0 24 24" fill="#5FA8FF" aria-hidden="true"><path d="${ICONS.plane}"/></svg>
+      <div class="splash-logo">Fly <span>Alert</span></div>
+      <p>Acompanhe os preços das suas viagens e seja avisado quando eles caírem.</p>
+    </div>
+    <div class="splash-actions">
+      <button class="btn btn-splash" data-go="#/home">Começar</button>
+      <a class="link-center" href="#/home">Já tenho uma conta</a>
+    </div>
+  </div>`;
+}
 
-  let manchete = 'Nenhum trajeto ativo.', sub = 'Toque no + para criar o primeiro alerta.';
-  if (itens.length) {
-    if (baratos.length) {
-      const melhor = [...baratos].sort((x, y) => x.a.vsMedia - y.a.vsMedia)[0];
-      manchete = `${baratos.length} de ${itens.length} trajeto${itens.length > 1 ? 's' : ''} barato${baratos.length > 1 ? 's' : ''} agora`;
-      sub = `Melhor momento: ${rota(melhor.w)} · ${dataLonga(melhor.w.outbound_date)} por ${brl(melhor.a.atual, melhor.w.currency)}.`;
-    } else {
-      manchete = 'Nenhum trajeto está barato agora';
-      sub = caros.length
-        ? `${caros.length} está${caros.length > 1 ? 'ão' : ''} entre os preços mais altos do histórico. Os outros estão na média.`
-        : 'Todos estão na média do histórico (ou ainda com poucos dados).';
-    }
-  }
+function telaHome() {
+  const r = resumoGeral();
+  const ativos = S.watches.filter((w) => w.active).slice(0, 3);
+  const spark = `<svg class="spark" width="70" height="34" viewBox="0 0 70 34" fill="none">
+    <path d="M2 30 L16 22 L28 26 L42 13 L54 16 L68 4" stroke="#5AE29A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M60 4h8v8" stroke="#5AE29A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
   return `
-  ${topbar('Painel')}
+  <div class="hello">
+    <h2>Olá, ${esc(USUARIO.nome.split(' ')[0])} 👋</h2>
+    <p>Aqui está um resumo dos seus alertas</p>
+  </div>
+
+  <div class="savings">
+    <h3>Você está economizando!</h3>
+    <p>Nos últimos 30 dias, ${r.comDados} rota${r.comDados === 1 ? '' : 's'} monitorada${r.comDados === 1 ? '' : 's'} estão abaixo da própria média.</p>
+    <div class="big">${brl(r.economia)}</div>
+    ${spark}
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="ic" style="background:var(--blue-soft);color:var(--blue)">${ic('bell', 17)}</div>
+      <div><b>${r.ativos}</b><small>Alertas ativos</small></div></div>
+    <div class="tile"><div class="ic" style="background:var(--blue-soft);color:var(--blue)">${ic('trend', 17)}</div>
+      <div><b>${r.quedas}</b><small>Quedas de preço</small></div></div>
+    <div class="tile"><div class="ic" style="background:var(--green-bg);color:var(--green)">${ic('check', 17)}</div>
+      <div><b>${r.total}</b><small>Rotas monitoradas</small></div></div>
+    <div class="tile"><div class="ic" style="background:#FFF3E0;color:var(--amber)">${ic('money', 17)}</div>
+      <div><b>${brl(r.potencial)}</b><small>Economia potencial</small></div></div>
+  </div>
+
   <div class="wrap">
-    <div class="card resumo ${baratos.length ? 'bom' : ''}">
-      <h2>${manchete}</h2>
-      <p>${sub}</p>
-      <small>${r.ultima ? `Atualizado em ${fmtQuando(r.ultima)}` : 'Sem leituras ainda'}${r.proxima ? ` · próxima ~${fmtQuando(r.proxima)}` : ''}</small>
-    </div>
-    ${itens.length ? itens.map(({ w }) => cardVeredito(w)).join('')
-      : `<div class="empty">Nenhum alerta ativo ainda.</div>`}
+    <div class="section-title">Seus alertas <a href="#/alertas">Ver todos</a></div>
+    ${ativos.length ? `<div class="rows">${ativos.map((w) => linhaAlerta(w)).join('')}</div>`
+      : `<div class="empty">Nenhum alerta ativo ainda. Toque no + para criar o primeiro.</div>`}
   </div>`;
 }
 
@@ -414,80 +481,100 @@ function telaAlertas() {
   ${topbar('Meus Alertas', { acao: `<button class="iconbtn blue" data-go="#/novo" aria-label="Novo alerta">${ic('plus', 24)}</button>` })}
   <div class="tabs light">
     <button class="${S.view.tabAlertas === 'ativos' ? 'on' : ''}" data-tab="ativos">Ativos (${ativos.length})</button>
-    <button class="${S.view.tabAlertas === 'inativos' ? 'on' : ''}" data-tab="inativos">Pausados (${inativos.length})</button>
+    <button class="${S.view.tabAlertas === 'inativos' ? 'on' : ''}" data-tab="inativos">Inativos (${inativos.length})</button>
   </div>
   <div class="wrap" style="margin-top:14px">
-    ${lista.length ? `<div class="rows">${lista.map(linhaAlerta).join('')}</div>`
-      : `<div class="empty" style="margin:0">Nenhum alerta ${S.view.tabAlertas === 'ativos' ? 'ativo' : 'pausado'} no momento.</div>`}
+    ${lista.length ? `<div class="rows">${lista.map((w) => linhaAlerta(w, { toggle: true })).join('')}</div>`
+      : `<div class="empty" style="margin:0">Nenhum alerta ${S.view.tabAlertas === 'ativos' ? 'ativo' : 'inativo'} no momento.</div>`}
   </div>`;
 }
 
 function telaAlerta(id) {
   const w = S.watches.find((x) => x.id === id);
-  if (!w) return `${topbar('Alerta', { voltar: '#/home' })}<div class="error">Alerta não encontrado.</div>`;
-  const a = analise(w);
+  if (!w) return `<div class="error">Alerta não encontrado.</div>`;
+  const s = stats(w);
+  const u = S.ultima[w.id];
   const pts = S.checks[w.id] || [];
-  const of = S.ofertas[w.id];
-  const ofertas = (Array.isArray(of?.offers) ? [...of.offers] : [])
-    .filter((o) => o.departure)
-    .sort((x, y) => String(x.departure).localeCompare(String(y.departure)));
-  const barato = ofertas.length ? ofertas.reduce((x, y) => (y.price < x.price ? y : x)) : null;
-  const dias = a ? Math.max(1, Math.round((Date.now() - a.primeiro) / DIA)) : 0;
-
-  const linhasOfertas = ofertas.map((o) => `
-    <div class="row" style="padding:10px 0">
-      <div class="info">
-        <b>${hhmm(o.departure) || '--:--'} → ${hhmm(o.arrival) || '--:--'}${o === barato ? ' <span class="badge">mais barato</span>' : ''}</b>
-        <small>${esc(o.departure_id || sigla(w.departure_id))} → ${esc(sigla(w.arrival_id))} · ${o.stops === 0 ? 'Direto' : `${o.stops} escala${o.stops > 1 ? 's' : ''}`} · ${durStr(o.duration_min)}</small>
-        <small>${esc((o.airlines || []).join(' + ') || '—')}</small>
-      </div>
-      <b style="font-size:14.5px">${brl(o.price, w.currency)}</b>
-    </div>`).join('');
+  const av = analise(w);
+  const dica = av
+    ? `${fraseVeredito(av, w)}${s && s.atual > s.min ? ` Menor valor já visto: <b>${brl(s.min, w.currency)}</b>.` : ''}`
+    : 'Ainda sem leituras para comparar com o histórico.';
 
   return `
-  ${topbar(rota(w), { voltar: '#/home' })}
-  <div class="wrap">
-    <div class="card">
-      <div class="vtop"><span class="muted small">${dataLonga(w.outbound_date)} · ${faixaTxt(w)} · ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''}</span>${vdBadge(a)}</div>
-      ${a ? `<div class="vprice big">${brl(a.atual, w.currency)}</div>
-        ${faixaPreco(a, w)}
-        <ul class="frases">${frasesAnalise(a, w).map((f) => `<li>${f}</li>`).join('')}</ul>`
-        : `<p class="muted small" style="margin-top:10px">Ainda sem leituras para este trajeto.</p>`}
+  <div class="hero" style="background:${grad(w)}">
+    <div class="hero-nav">
+      <button class="iconbtn" style="color:#fff" data-go="#/alertas" aria-label="Voltar">${ic('left', 22)}</button>
+      <button class="iconbtn" style="color:#fff" data-go="#/historico/${w.id}" aria-label="Histórico">${ic('bookmark', 22)}</button>
+    </div>
+    <div class="codes">${sigla(w.departure_id)} → ${sigla(w.arrival_id)}</div>
+    <span class="pill">${w.active ? '🔔 Alerta ativo' : '⏸ Alerta pausado'}</span>
+  </div>
+
+  <div class="detail-head">
+    <h2>${esc(rota(w))}</h2>
+    <div class="sub">Só ida · ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''}</div>
+    <div class="sub" style="margin-top:8px">${ic('cal2', 15)} ${dataLonga(w.outbound_date)}</div>
+
+    <div class="price-xl">${s ? brl(s.atual, w.currency) : '—'} ${vdBadge(analise(w))}</div>
+    <div class="sub">Menor preço encontrado: <b>${s ? brl(s.min, w.currency) : '—'}</b>${u?.airline ? ` · ${esc(u.airline)}` : ''}</div>
+
+    <button class="btn" style="margin-top:14px" data-go="#/viagem/${w.id}">Ver detalhes da viagem</button>
+
+    <div class="tipcard">
+      <span class="ic">${ic('bulb', 20)}</span>
+      <p>${dica}</p>
     </div>
 
-    ${a ? `<div class="tiles" style="padding:12px 0 0;gap:10px">
-      <div class="tile"><div><b>${brl(a.media, w.currency)}</b><small>Média histórica</small></div></div>
-      <div class="tile"><div><b>${brl(a.min, w.currency)}</b><small>Menor preço</small></div></div>
-      <div class="tile"><div><b>${brl(a.max, w.currency)}</b><small>Maior preço</small></div></div>
-      <div class="tile"><div><b>${a.n}</b><small>Leituras · ${dias} dias</small></div></div>
-    </div>` : ''}
-
-    <div class="card" style="margin-top:12px">
-      <b style="font-size:15px">Histórico de preços</b>
+    <div class="chartbox">
+      <h3>Histórico de preços</h3>
       ${filtroJanela()}
       ${chart(pts, { janela: S.view.janela })}
+      <button class="btn ghost" style="margin-top:10px" data-go="#/historico/${w.id}">Ver histórico completo</button>
     </div>
+  </div>`;
+}
 
-    <div class="card" style="margin-top:12px">
-      <b style="font-size:15px">Horários encontrados</b>
-      ${ofertas.length
-        ? `<div style="margin-top:6px">${linhasOfertas}</div>
-           <div class="muted small" style="margin-top:8px">Atualizado em ${fmtQuando(of.checked_at)} · são as opções mais baratas da consulta, não todos os voos do dia.</div>`
-        : `<div class="muted small" style="margin-top:8px">Ainda sem horários salvos. Eles aparecem após a próxima consulta.</div>`}
-    </div>
+function telaHistorico(id) {
+  const w = S.watches.find((x) => x.id === id);
+  if (!w) return `<div class="error">Alerta não encontrado.</div>`;
+  const s = stats(w);
+  const pts = S.checks[w.id] || [];
+  const dias = s ? Math.max(1, Math.round((Date.now() - s.primeiro) / DIA)) : 0;
+  const j = statsJanela(w, S.view.janela);
+  const rot = rotuloJanela(S.view.janela);
+  const antecedencia = Math.round((D(w.outbound_date) - Date.now()) / DIA);
 
-    <div style="display:flex;gap:10px;margin-top:14px">
-      <a class="btn" style="flex:1;text-align:center" href="${linkGoogleFlights(w)}" target="_blank" rel="noopener noreferrer">Google Flights</a>
-      <a class="btn" style="flex:1;text-align:center" href="${linkSkyscanner(w)}" target="_blank" rel="noopener noreferrer">Skyscanner</a>
-    </div>
+  const dicas = [
+    [ic('clock', 18), `Faltam <b>${antecedencia} dias</b> para a viagem. A faixa mais barata costuma aparecer entre 60 e 90 dias antes.`],
+    [ic('cal2', 18), `Terça e quarta são os dias com os preços mais baixos — o robô consulta de 1 a 3 dias, conforme a viagem se aproxima (~06h17).`],
+    [ic('plane', 18), `Voos diretos podem sair mais caros, mas economizam tempo. Compare na aba da viagem.`],
+  ];
 
-    <div class="card" style="margin-top:12px;display:flex;align-items:center;gap:12px">
-      <div style="flex:1">
-        <b style="font-size:15px">Alerta ${w.active ? 'ativo' : 'pausado'}</b>
-        <div class="muted small">Consulta a cada ${intervaloDias(w)} dia${intervaloDias(w) > 1 ? 's' : ''} (viagem ${intervaloDias(w) > 1 ? 'ainda distante' : 'próxima'})${w.target_price ? ` · avisa até ${brl(w.target_price, w.currency)}` : ''}</div>
+  return `
+  ${topbar('Histórico de preços', { voltar: `#/alerta/${w.id}` })}
+  <div class="wrap">
+    <div class="card">
+      <b style="font-size:16px">${esc(rota(w))}</b>
+      <div class="sub muted small">Só ida · ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''}</div>
+      <div class="price-xl" style="font-size:27px">${s ? brl(s.atual, w.currency) : '—'} ${s ? badge(s.pct) : ''}</div>
+      <div class="small" style="color:var(--green);font-weight:600">Menor preço: ${s ? brl(s.min, w.currency) : '—'}</div>
+      ${filtroJanela()}
+      ${chart(pts, { alto: true, janela: S.view.janela })}
+      <div class="tiles" style="padding:12px 0 0;gap:10px">
+        <div class="tile"><div><b>${j ? brl(j.media, w.currency) : '—'}</b><small>Média · ${rot}</small></div></div>
+        <div class="tile"><div><b>${j ? brl(j.max, w.currency) : '—'}</b><small>Máximo · ${rot}</small></div></div>
+        <div class="tile"><div><b>${j ? j.leituras : 0}</b><small>Leituras · ${rot}</small></div></div>
+        <div class="tile"><div><b>${dias}</b><small>Dias monitorando</small></div></div>
       </div>
-      <div class="switch ${w.active ? 'on' : ''}" data-toggle="${w.id}" role="switch" aria-checked="${w.active}" tabindex="0"></div>
     </div>
+
+    <div class="card">
+      <b style="font-size:15px">Dicas para comprar</b>
+      ${dicas.map(([icone, txt]) => `<div class="tipcard" style="background:#F4F7FB">
+        <span class="ic">${icone}</span><p>${txt}</p></div>`).join('')}
+    </div>
+
+    <button class="btn" style="margin-top:14px" data-go="#/novo">Criar alerta parecido</button>
   </div>`;
 }
 
@@ -501,8 +588,14 @@ function telaNovo() {
     `<option value="${v}" ${v === valor ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
 
   return `
-  ${topbar('Novo alerta', { voltar: '#/alertas' })}
+  ${topbar('Adicionar Alerta', { voltar: '#/alertas' })}
   <div class="wrap">
+    <div class="tabs light" style="margin:0 0 4px">
+      <button class="on">Voos</button>
+      <button disabled style="opacity:.5">Hotéis</button>
+      <button disabled style="opacity:.5">Pacotes</button>
+    </div>
+
     <div class="field"><label>Origem</label>
       <div class="control"><span class="ic">${ic('plane', 18)}</span>${sel('f-origem', 'GRU,CGH,VCP')}<span class="chev">${ic('right', 16)}</span></div></div>
 
@@ -511,16 +604,6 @@ function telaNovo() {
 
     <div class="field"><label>Data do voo (só ida)</label>
       <div class="control"><span class="ic">${ic('calendar', 18)}</span><input type="date" id="f-ida" value="2026-12-26"></div></div>
-
-    <div class="field"><label>Horário de partida</label>
-      <div class="control"><span class="ic">${ic('clock', 18)}</span>
-        <select id="f-janela">
-          <option value="">Qualquer horário</option>
-          <option value="5,12">Manhã (05h–12h)</option>
-          <option value="12,18">Tarde (12h–18h)</option>
-          <option value="18,23">Noite (18h–23h)</option>
-          <option value="0,5">Madrugada (00h–05h)</option>
-        </select></div></div>
 
     <div class="field"><label>Passageiros</label>
       <div class="control"><span class="ic">${ic('users', 18)}</span>
@@ -533,71 +616,272 @@ function telaNovo() {
         <input type="number" id="f-teto" placeholder="2.000" inputmode="numeric"></div>
       <div class="hint">Vamos te avisar quando o preço ficar igual ou menor.</div></div>
 
+    <div class="field"><label>Horário de partida</label>
+      <div class="control"><span class="ic">${ic('clock', 18)}</span>
+        <select id="f-janela">
+          <option value="">Qualquer horário</option>
+          <option value="5,12">Manhã (05h–12h)</option>
+          <option value="12,18">Tarde (12h–18h)</option>
+          <option value="18,23">Noite (18h–23h)</option>
+          <option value="0,5">Madrugada (00h–05h)</option>
+        </select></div></div>
+
     <button class="btn" id="btn-criar" style="margin:20px 0 8px">Criar alerta</button>
-    <p class="hint" style="text-align:center">O robô consulta 1x por dia perto da viagem e a cada 2–3 dias quando ela ainda está longe, para economizar buscas.</p>
+    <p class="hint" style="text-align:center">O robô consulta esta rota todo dia perto da viagem e a cada 2–3 dias quando ela ainda está longe.</p>
   </div>`;
 }
 
-function telaAjustes() {
-  const ativo = typeof Notification !== 'undefined' && Notification.permission === 'granted';
-  const r = resumoAtualizacao();
-  const maxAlertas = Math.floor((BUSCAS_MES - RESERVA_BUSCAS) / 30);
+function telaFiltros() {
+  const f = S.filtros;
+  const cias = ['LATAM', 'Gol', 'Azul', 'American Airlines', 'Air France'];
+  const horarios = [['0,5', 'Madrugada', '00h–05h'], ['5,12', 'Manhã', '05h–12h'], ['12,18', 'Tarde', '12h–18h'], ['18,23', 'Noite', '18h–23h']];
+  const escalas = [['todas', 'Todas'], ['0', 'Direto'], ['1', '1 escala'], ['2', '2+ escalas']];
 
-  const recentes = S.alertas.map((al) => {
-    const w = S.watches.find((x) => x.id === al.watch_id);
+  return `
+  <div class="topbar" style="background:linear-gradient(135deg,#0B2447,#1B4D87);color:#fff;border-radius:0 0 18px 18px;margin-bottom:6px">
+    <button class="iconbtn" style="color:#fff" data-go="#/viagens" aria-label="Fechar">${ic('x', 22)}</button>
+    <h1>Filtros</h1><div class="spacer"></div>
+    <button style="color:#9FC6FF;font-weight:600;font-size:14px" id="btn-limpar">Limpar</button>
+  </div>
+  <div class="wrap">
+    <div class="section-title">Escalas</div>
+    <div class="radio-list">
+      ${escalas.map(([v, t]) => `<button class="radio ${f.escalas === v ? 'on' : ''}" data-escala="${v}"><span class="dot"></span>${t}</button>`).join('')}
+    </div>
+
+    <div class="section-title">Horários de partida</div>
+    <div class="chips">
+      ${horarios.map(([v, t, h]) => `<button class="chip ${f.horarios.includes(v) ? 'on' : ''}" data-hora="${v}"><b>${t}</b><small>${h}</small></button>`).join('')}
+    </div>
+
+    <div class="section-title">Companhias aéreas</div>
+    <div class="rows">
+      <div class="row"><span class="info"><b>Todas</b></span>
+        <div class="switch ${f.cias.length === 0 ? 'on' : ''}" data-cia="__todas__" role="switch"></div></div>
+      ${cias.map((c) => `<div class="row"><span class="info"><b>${c}</b></span>
+        <div class="switch ${f.cias.includes(c) ? 'on' : ''}" data-cia="${c}" role="switch"></div></div>`).join('')}
+    </div>
+
+    <button class="btn" style="margin:20px 0" data-go="#/viagens">Aplicar filtros</button>
+  </div>`;
+}
+
+function telaNotificacoes() {
+  const ativo = typeof Notification !== 'undefined' && Notification.permission === 'granted';
+  const recentes = S.alertas.slice(0, 8).map((a) => {
+    const w = S.watches.find((x) => x.id === a.watch_id);
     if (!w) return '';
-    const horas = Math.round((Date.now() - new Date(al.sent_at)) / 3600000);
-    const quando = horas < 24 ? `${horas}h atrás` : `${Math.round(horas / 24)} dia${horas >= 48 ? 's' : ''} atrás`;
-    const motivo = { target: 'Atingiu seu teto', below_typical: 'Abaixo da faixa normal', all_time_low: 'Menor preço já visto' }[al.reason] || 'Preço caiu';
+    const quando = new Date(a.sent_at);
+    const horas = Math.round((Date.now() - quando) / 3600000);
+    const quando_txt = horas < 24 ? `${horas}h atrás` : `${Math.round(horas / 24)} dia${horas >= 48 ? 's' : ''} atrás`;
+    const motivo = { target: 'Atingiu seu teto', below_typical: 'Abaixo da faixa normal', all_time_low: 'Menor preço já visto' }[a.reason] || 'Preço caiu';
     return `<div class="row">
       <span class="thumb" style="background:${grad(w)}">${sigla(w.departure_id)}→${sigla(w.arrival_id)}</span>
       <button class="info" data-go="#/alerta/${w.id}">
         <b>${esc(rota(w))}</b>
         <small style="color:var(--green);font-weight:600">${motivo}</small>
-        <span class="price">${brl(al.price, w.currency)} <span class="muted small" style="font-weight:500">· ${quando}</span></span>
+        <span class="price">${brl(a.price, w.currency)} <span class="muted small" style="font-weight:500">· ${quando_txt}</span></span>
       </button>
       <span class="chev">${ic('right', 18)}</span>
     </div>`;
   }).join('');
 
   return `
-  ${topbar('Ajustes')}
+  ${topbar('Notificações', { voltar: '#/home' })}
   <div class="wrap">
     <div class="card" style="display:flex;align-items:center;gap:12px">
       <div style="flex:1">
-        <b style="font-size:15px">Notificações</b>
-        <div class="muted small" id="push-status">Receba um aviso quando o preço cair.</div>
+        <b style="font-size:15px">Ativar notificações</b>
+        <div class="muted small" id="push-status">Receba alertas quando os preços caírem.</div>
       </div>
       <div class="switch ${ativo ? 'on' : ''}" id="push-switch" role="switch" aria-checked="${ativo}" tabindex="0"></div>
     </div>
 
-    <div class="card" style="margin-top:12px">
-      <b style="font-size:15px">Atualização dos dados</b>
-      <div class="row" style="padding:9px 0"><span class="info"><b>Última atualização</b></span><span>${r.ultima ? fmtQuando(r.ultima) : '—'}</span></div>
-      <div class="row" style="padding:9px 0"><span class="info"><b>Próxima (aprox.)</b></span><span>${r.proxima ? fmtQuando(r.proxima) : '—'}</span></div>
-      <div class="row" style="padding:9px 0"><span class="info"><b>Horário do robô</b></span><span>todo dia · 06h17</span></div>
-      <div class="row" style="padding:9px 0"><span class="info"><b>Buscas por mês</b></span><span>~${r.buscasMes} de ${BUSCAS_MES}</span></div>
-      <div class="muted small" style="margin-top:6px">Cada trajeto é consultado a cada 3 dias quando faltam mais de 90 dias para a viagem, a cada 2 dias entre 30 e 90, e todo dia nos últimos 30. Cada consulta gasta 1 busca. Cabem até ${maxAlertas} alertas diários na cota gratuita.</div>
+    <div class="section-title">Alertas recentes</div>
+    ${recentes ? `<div class="rows">${recentes}</div>`
+      : `<div class="empty" style="margin:0">Nenhum aviso enviado ainda. Assim que uma tarifa cair, ela aparece aqui.</div>`}
+
+    <div class="tipcard" style="margin-top:16px">
+      <span class="ic">${ic('bell', 20)}</span>
+      <p><b>Dica.</b> Ative as notificações push para ser avisado assim que uma consulta (~06h17) achar uma tarifa menor.</p>
+    </div>
+  </div>`;
+}
+
+function ofertasFiltradas(u) {
+  let of = Array.isArray(u?.offers) ? [...u.offers] : [];
+  const f = S.filtros;
+  if (f.escalas !== 'todas') {
+    const n = Number(f.escalas);
+    of = of.filter((o) => (n === 2 ? o.stops >= 2 : o.stops === n));
+  }
+  if (f.horarios.length) {
+    of = of.filter((o) => {
+      const h = Number(hhmm(o.departure).split(':')[0]);
+      return f.horarios.some((j) => { const [a, b] = j.split(',').map(Number); return h >= a && h < b; });
+    });
+  }
+  if (f.cias.length) of = of.filter((o) => (o.airlines || []).some((c) => f.cias.includes(c)));
+  return of;
+}
+
+const abasViagens = (ativa) => `<div class="tabs light" style="margin-bottom:14px">
+  <button class="${ativa === 'viagens' ? 'on' : ''}" data-go="#/viagens">Viagens</button>
+  <button class="${ativa === 'info' ? 'on' : ''}" data-go="#/info">Informações</button>
+</div>`;
+
+// Horários de cada trajeto, lidos da última consulta salva (não gasta requisição).
+function telaInfo() {
+  const lista = S.watches.filter((w) => w.active);
+  const quando = fmtQuando;
+
+  const bloco = (w) => {
+    const u = S.ultima[w.id];
+    const ofertas = (Array.isArray(u?.offers) ? [...u.offers] : [])
+      .filter((o) => o.departure)
+      .sort((a, b) => String(a.departure).localeCompare(String(b.departure)));
+    const barato = ofertas.length ? ofertas.reduce((a, b) => (b.price < a.price ? b : a)) : null;
+    const faixa = faixaTxt(w);
+
+    const linhas = ofertas.map((o) => `
+      <div class="row" style="padding:10px 0">
+        <div class="info">
+          <b>${hhmm(o.departure) || '--:--'} → ${hhmm(o.arrival) || '--:--'}${o === barato ? ' <span class="badge">mais barato</span>' : ''}</b>
+          <small>${esc(o.departure_id || sigla(w.departure_id))} → ${esc(sigla(w.arrival_id))} · ${o.stops === 0 ? 'Direto' : `${o.stops} escala${o.stops > 1 ? 's' : ''}`} · ${durStr(o.duration_min)}</small>
+          <small>${esc((o.airlines || []).join(' + ') || '—')}</small>
+        </div>
+        <b style="font-size:14.5px">${brl(o.price, w.currency)}</b>
+      </div>`).join('');
+
+    return `<div class="card">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="thumb" style="background:${grad(w)};flex:none">${sigla(w.departure_id)}→${sigla(w.arrival_id)}</span>
+        <div style="flex:1;min-width:0">
+          <b style="font-size:15.5px">${esc(rota(w))}</b>
+          <div class="muted small">${dataLonga(w.outbound_date)} · ${faixa}</div>
+        </div>
+      </div>
+      ${ofertas.length
+        ? `<div style="margin-top:8px">${linhas}</div>
+           <div class="muted small" style="margin-top:8px">Atualizado em ${quando(u.checked_at)} · ${ofertas.length} horário${ofertas.length > 1 ? 's' : ''}</div>`
+        : `<div class="muted small" style="margin-top:12px">Ainda sem horários salvos para este trajeto. Eles aparecem após a próxima consulta.</div>`}
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn ghost" style="flex:1" data-go="#/viagem/${w.id}">Detalhes</button>
+        <a class="btn ghost" style="flex:1;text-align:center" href="${linkSkyscanner(w)}" target="_blank" rel="noopener noreferrer">Skyscanner</a>
+      </div>
+    </div>`;
+  };
+
+  return `${topbar('Minhas viagens')}
+  <div class="wrap">
+    ${abasViagens('info')}
+    ${cardAtualizacao()}
+    ${lista.length ? lista.map(bloco).join('')
+      : `<div class="empty" style="margin:0">Nenhum trajeto ativo. Toque no + para criar um alerta.</div>`}
+    <div class="tipcard">
+      <span class="ic">${ic('info', 20)}</span>
+      <p>Os horários vêm da última consulta de cada trajeto (~06h17) e mostram as opções mais baratas encontradas, não todos os voos do dia.</p>
+    </div>
+  </div>`;
+}
+
+function telaViagem(id) {
+  if (!id) {
+    return `${topbar('Minhas viagens')}
+    <div class="wrap">${abasViagens('viagens')}${cardAtualizacao()}${S.watches.length
+      ? `<div class="rows">${S.watches.map((w) => linhaAlerta(w)).join('')}</div>`
+      : `<div class="empty" style="margin:0">Nenhuma viagem monitorada.</div>`}</div>`;
+  }
+  const w = S.watches.find((x) => x.id === id);
+  if (!w) return `<div class="error">Viagem não encontrada.</div>`;
+  const u = S.ultima[w.id];
+  const s = stats(w);
+  const of = ofertasFiltradas(u);
+  const total = Array.isArray(u?.offers) ? u.offers.length : 0;
+
+  const cardOferta = (o, i) => `
+    <div class="leg">
+      <div class="route"><span>${o.departure_id || sigla(w.departure_id)} → ${sigla(w.arrival_id)}</span><span>${brl(o.price, w.currency)}</span></div>
+      <div class="meta">${dataLonga(w.outbound_date)} · ${hhmm(o.departure) || '--:--'} – ${hhmm(o.arrival) || '--:--'}</div>
+      <div class="meta">${o.stops === 0 ? '● Direto' : `● ${o.stops} escala${o.stops > 1 ? 's' : ''}`} · ${durStr(o.duration_min)} · ${(o.airlines || []).join(' + ') || '—'}</div>
+      <button class="more" data-leg="${i}">${S.view.legAberta === String(i) ? '▲ Ocultar detalhes' : '▼ Ver detalhes'}</button>
+      <div class="leg-detail ${S.view.legAberta === String(i) ? 'on' : ''}">
+        Saída ${hhmm(o.departure) || '—'} de ${o.departure_id || '—'}<br>
+        Chegada ${hhmm(o.arrival) || '—'} em ${sigla(w.arrival_id)}<br>
+        Duração total ${durStr(o.duration_min)} · ${o.stops === 0 ? 'sem conexões' : `${o.stops} conexão(ões)`}<br>
+        Preço por ${w.adults || 1} passageiro(s), moeda ${w.currency}
+      </div>
+    </div>`;
+
+  return `
+  ${topbar('Minha Viagem', { voltar: `#/alerta/${w.id}`, acao: `<button class="iconbtn blue" data-go="#/filtros" aria-label="Filtros">${ic('trend', 20)}</button>` })}
+  <div class="wrap">
+    <div class="hero" style="background:${grad(w)};height:130px;border-radius:16px">
+      <div class="codes" style="font-size:26px">${sigla(w.departure_id)} → ${sigla(w.arrival_id)}</div>
+    </div>
+    <div style="margin-top:12px">
+      <b style="font-size:17px">${esc(cidade(w.arrival_id))}</b>
+      <div class="muted small">${dataLonga(w.outbound_date)}</div>
+      <div class="muted small">${ic('users', 14)} ${w.adults || 1} pessoa${(w.adults || 1) > 1 ? 's' : ''} · ${faixaTxt(w)}</div>
+      <div class="muted small">${ic('clock', 14)} Atualizado em ${S.ultima[w.id]?.checked_at ? fmtQuando(S.ultima[w.id].checked_at) : '—'} · próxima ~${fmtQuando(proximaConsulta(w))}</div>
     </div>
 
-    <div class="section-title">Avisos enviados</div>
-    ${recentes ? `<div class="rows">${recentes}</div>`
-      : `<div class="empty" style="margin:0">Nenhum aviso enviado ainda.</div>`}
+    <div class="section-title">Voos encontrados <span class="muted small" style="font-weight:500">${of.length} de ${total}</span></div>
+    ${of.length ? of.map(cardOferta).join('')
+      : `<div class="empty" style="margin:0">Nenhuma opção bate com os filtros atuais. <button style="color:var(--blue);font-weight:600" data-go="#/filtros">Ajustar filtros</button></div>`}
 
-    <p class="hint" style="text-align:center;margin-top:16px">Fly Alert · dados via Google Flights (SerpApi) · build 16</p>
+    ${s ? `<div class="result">
+      <span style="color:var(--green)">${ic('check', 22)}</span>
+      <div><b>${brl(s.atual, w.currency)}</b>
+        <small>${s.atual <= s.min ? 'Este é o menor preço já registrado' : `Você economiza ${brl(s.max - s.atual, w.currency)} em relação ao pico`}</small></div>
+    </div>` : ''}
+
+    <a class="btn" style="margin-top:16px" href="${linkGoogleFlights(w)}" target="_blank" rel="noopener noreferrer">
+      ${ic('plane', 18)} Ver passagem no Google Flights
+    </a>
+    <p class="hint" style="text-align:center;margin:8px 0 0">Abre a busca já preenchida com a rota, as datas e ${w.adults || 1} passageiro${(w.adults || 1) > 1 ? 's' : ''}.</p>
+    <a class="btn ghost" style="margin-top:12px;text-align:center" href="${linkSkyscanner(w)}" target="_blank" rel="noopener noreferrer">
+      Ver passagem no Skyscanner
+    </a>
+    <button class="btn ghost" style="margin:12px 0 0" data-go="#/historico/${w.id}">Ver histórico de preços</button>
   </div>`;
+}
+
+function telaPerfil() {
+  const itens = [
+    ['plane', 'Minhas viagens', '#/viagens'],
+    ['hist', 'Histórico de preços', S.watches[0] ? `#/historico/${S.watches[0].id}` : '#/alertas'],
+    ['bell', 'Meus alertas', '#/alertas'],
+    ['bell', 'Notificações', '#/notificacoes'],
+    ['card', 'Formas de pagamento', '#/perfil'],
+    ['help', 'Ajuda e suporte', '#/perfil'],
+    ['info', 'Sobre o Fly Alert', '#/perfil'],
+  ];
+  const iniciais = USUARIO.nome.split(' ').map((p) => p[0]).slice(0, 2).join('');
+  return `
+  ${topbar('Perfil')}
+  <div class="prof">
+    <div class="avatar">${iniciais}</div>
+    <div><b style="font-size:15.5px">${esc(USUARIO.nome)}</b><div class="muted small">${esc(USUARIO.email)}</div></div>
+  </div>
+  <div class="menu">
+    ${itens.map(([i, t, go]) => `<button data-go="${go}"><span class="ic">${ic(i, 20)}</span><span style="flex:1">${t}</span><span class="chev">${ic('right', 18)}</span></button>`).join('')}
+    <button class="danger" data-go="#/"><span class="ic">${ic('logout', 20)}</span><span style="flex:1">Sair</span></button>
+  </div>
+  <p class="hint" style="text-align:center;margin-top:16px">Fly Alert · dados via Google Flights (SerpApi) · build 17</p>`;
 }
 
 /* ---------------- navegação ---------------- */
 
-const TELAS = ['home', 'alertas', 'alerta', 'novo', 'ajustes'];
+const TELAS = ['splash', 'home', 'alertas', 'alerta', 'historico', 'novo', 'filtros', 'notificacoes', 'viagem', 'info', 'perfil'];
 
 function navbar(atual) {
   const itens = [
-    ['home', 'Painel', '#/home'],
+    ['home', 'Início', '#/home'],
     ['bell', 'Alertas', '#/alertas'],
     ['__fab__', '', '#/novo'],
-    ['info', 'Ajustes', '#/ajustes'],
+    ['plane', 'Viagens', '#/viagens'],
+    ['user', 'Perfil', '#/perfil'],
   ];
   return itens.map(([i, t, go]) => i === '__fab__'
     ? `<button data-go="${go}" aria-label="Novo alerta"><span class="fab">${ic('plus', 24)}</span></button>`
@@ -607,37 +891,42 @@ function navbar(atual) {
 function render() {
   const hash = location.hash || '#/';
   const [, seg, id] = hash.split('/');
-  // links antigos (viagem, histórico, filtros, perfil…) continuam funcionando
   const mapa = {
-    '': 'home', home: 'home', alertas: 'alertas', alerta: 'alerta', viagem: 'alerta', historico: 'alerta',
-    novo: 'novo', ajustes: 'ajustes', perfil: 'ajustes', notificacoes: 'ajustes',
-    info: 'home', viagens: 'home', filtros: 'home',
+    '': 'splash', home: 'home', alertas: 'alertas', alerta: 'alerta', historico: 'historico',
+    novo: 'novo', filtros: 'filtros', notificacoes: 'notificacoes',
+    viagem: 'viagem', viagens: 'viagem', info: 'info', perfil: 'perfil',
   };
   const tela = mapa[seg] ?? 'home';
 
   for (const t of TELAS) $(`scr-${t}`).classList.toggle('on', t === tela);
   const alvo = $(`scr-${tela}`);
 
-  if (!S.carregado) {
+  if (tela !== 'splash' && !S.carregado) {
     alvo.innerHTML = S.erro
       ? `<div class="error">Não deu para carregar os preços: ${esc(S.erro)}</div>`
       : `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
   } else {
-    alvo.innerHTML = {
-      home: telaHome, alertas: telaAlertas, novo: telaNovo, ajustes: telaAjustes,
-      alerta: () => telaAlerta(id),
-    }[tela]();
+    const html = {
+      splash: telaSplash, home: telaHome, alertas: telaAlertas, novo: telaNovo,
+      filtros: telaFiltros, notificacoes: telaNotificacoes, perfil: telaPerfil, info: telaInfo,
+      alerta: () => telaAlerta(id), historico: () => telaHistorico(id),
+      viagem: () => telaViagem(seg === 'viagem' ? id : null),
+    }[tela];
+    alvo.innerHTML = html();
   }
 
   const nav = $('nav');
-  nav.hidden = false;
-  nav.innerHTML = navbar({ home: '#/home', alerta: '#/home', alertas: '#/alertas', novo: '#/novo', ajustes: '#/ajustes' }[tela]);
+  nav.hidden = tela === 'splash';
+  if ($('stamp')) $('stamp').hidden = tela === 'splash';
+  atualizarCarimbo();
+  if (!nav.hidden) {
+    const aba = ['#/home', '#/alertas', '#/novo', '#/viagens', '#/perfil'];
+    const atual = aba.find((a) => hash.startsWith(a)) || (tela === 'viagem' || tela === 'info' ? '#/viagens' : tela === 'alerta' || tela === 'historico' ? '#/alertas' : '');
+    nav.innerHTML = navbar(atual);
+  }
   window.scrollTo(0, 0);
   if (tela === 'novo') prepararFormulario();
-  if (tela === 'ajustes') {
-    sincronizarPush();
-    if (!S.alertasOk && S.carregado) carregarAlertas().then(() => { if (location.hash.includes('ajustes')) render(); });
-  }
+  if (tela === 'notificacoes') sincronizarPush();
 }
 
 function toast(msg) {
@@ -655,18 +944,36 @@ document.addEventListener('click', async (e) => {
   if (go) { location.hash = go.dataset.go; return; }
 
   const jan = e.target.closest('[data-janela]');
-  if (jan) {
-    const y = window.scrollY;
-    S.view.janela = jan.dataset.janela === 'tudo' ? 'tudo' : Number(jan.dataset.janela);
-    render(); window.scrollTo(0, y); return;
-  }
+  if (jan) { S.view.janela = jan.dataset.janela === 'tudo' ? 'tudo' : Number(jan.dataset.janela); render(); return; }
 
   const tab = e.target.closest('[data-tab]');
   if (tab) { S.view.tabAlertas = tab.dataset.tab; render(); return; }
 
+  const leg = e.target.closest('[data-leg]');
+  if (leg) { S.view.legAberta = S.view.legAberta === leg.dataset.leg ? null : leg.dataset.leg; render(); return; }
+
   const tg = e.target.closest('[data-toggle]');
   if (tg) { await alternarAlerta(tg.dataset.toggle); return; }
 
+  const esc_ = e.target.closest('[data-escala]');
+  if (esc_) { S.filtros.escalas = esc_.dataset.escala; salvarFiltros(); render(); return; }
+
+  const hora = e.target.closest('[data-hora]');
+  if (hora) {
+    const v = hora.dataset.hora;
+    S.filtros.horarios = S.filtros.horarios.includes(v) ? S.filtros.horarios.filter((x) => x !== v) : [...S.filtros.horarios, v];
+    salvarFiltros(); render(); return;
+  }
+
+  const cia = e.target.closest('[data-cia]');
+  if (cia) {
+    const v = cia.dataset.cia;
+    if (v === '__todas__') S.filtros.cias = [];
+    else S.filtros.cias = S.filtros.cias.includes(v) ? S.filtros.cias.filter((x) => x !== v) : [...S.filtros.cias, v];
+    salvarFiltros(); render(); return;
+  }
+
+  if (e.target.closest('#btn-limpar')) { S.filtros = { escalas: 'todas', horarios: [], cias: [] }; salvarFiltros(); render(); return; }
   if (e.target.closest('#push-switch')) { ativarPush(); return; }
   if (e.target.closest('#btn-criar')) { criarAlerta(); return; }
 
@@ -676,7 +983,9 @@ document.addEventListener('click', async (e) => {
     const n = Math.min(9, Math.max(1, (Number(el.dataset.n || 1)) + Number(pax.dataset.pax)));
     el.dataset.n = n;
     el.textContent = `${n} adulto${n > 1 ? 's' : ''}`;
+    return;
   }
+
 });
 
 function prepararFormulario() {
@@ -689,8 +998,7 @@ async function alternarAlerta(id) {
   if (!w) return;
   const novo = !w.active;
   w.active = novo;
-  const y = window.scrollY;
-  render(); window.scrollTo(0, y);
+  render();
   try {
     await api(`watches?id=eq.${id}`, { method: 'PATCH', body: JSON.stringify({ active: novo }) });
     toast(novo ? 'Alerta reativado.' : 'Alerta pausado.');
@@ -724,7 +1032,7 @@ async function criarAlerta() {
       }),
     });
     await carregar();
-    toast('Alerta criado. A primeira leitura chega na próxima consulta.');
+    toast('Alerta criado. A primeira leitura chega no próximo ciclo.');
     location.hash = criado?.id ? `#/alerta/${criado.id}` : '#/alertas';
   } catch (err) {
     btn.disabled = false; btn.textContent = 'Criar alerta';
@@ -759,7 +1067,7 @@ function sincronizarPush() {
   const on = OS?.User?.PushSubscription?.optedIn && Notification.permission === 'granted';
   sw.classList.toggle('on', !!on);
   sw.setAttribute('aria-checked', String(!!on));
-  st.textContent = on ? 'Ativas neste aparelho.' : 'Receba um aviso quando o preço cair.';
+  st.textContent = on ? 'Ativas neste aparelho.' : 'Receba alertas quando os preços caírem.';
 }
 
 async function ativarPush() {
@@ -783,14 +1091,14 @@ async function ativarPush() {
 window.addEventListener('hashchange', render);
 render();
 carregar()
+  .then(() => { if (!location.hash || location.hash === '#/') return; render(); })
   .catch((err) => { S.erro = err.message; })
   .finally(render);
 
-// Os dados só mudam quando o robô roda (no máximo 1x por dia): ao voltar para o app,
-// só recarrega se já passaram 30 minutos — menos requisições ao banco.
+// PWA instalado fica vivo em segundo plano: recarrega os dados ao voltar para o app
 let ultimaCarga = Date.now();
 function recarregarAoVoltar() {
-  if (document.visibilityState !== 'visible' || Date.now() - ultimaCarga < 30 * 60000) return;
+  if (document.visibilityState !== 'visible' || Date.now() - ultimaCarga < 60000) return;
   ultimaCarga = Date.now();
   carregar().then(render).catch(() => {});
 }
