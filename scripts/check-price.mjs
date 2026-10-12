@@ -371,7 +371,7 @@ async function deveConsultarHoje(w, agora) {
   const r = await sb(`price_checks?watch_id=eq.${w.id}&source=neq.google_history&select=checked_at&order=checked_at.desc&limit=1`);
   if (!r[0]) return true;
   const idadeHoras = (agora - Date.parse(r[0].checked_at)) / 3600_000;
-  return idadeHoras >= intervalo * 24 - 3; // 3h de folga: o cron nunca roda exatamente no mesmo minuto
+  return idadeHoras >= intervalo * 24 - 12; // 12h de folga: a leitura anterior pode ter sido manual, fora do horário do cron
 }
 
 async function selecionarHoje(todas) {

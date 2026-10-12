@@ -74,7 +74,7 @@ const ultimaReal = (w) => {
 };
 function proximaConsulta(w) {
   const ult = ultimaReal(w);
-  const t = Math.max(Date.now(), ult ? ult + (intervaloDias(w) * 24 - 3) * 3600000 : 0);
+  const t = Math.max(Date.now(), ult ? ult + (intervaloDias(w) * 24 - 12) * 3600000 : 0);
   const d = new Date(t);
   let c = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), ATUALIZA_UTC[0], ATUALIZA_UTC[1]);
   if (c < t) c += 86400000;
